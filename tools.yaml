@@ -89,10 +89,10 @@ tools:
     version_cmd: ["--version"]
     update: [""]
 
-    bloodhound-automation:
-      kind: python-venv-requirements
-      path: bloodhound-automation
-      repo: "https://github.com/Tanguy-Boisset/bloodhound-automation"
-      venv: venv
-      entry: bloodhound-automation.py
-      version_args: null   # meta tool - no version check, skipped by installer
+  bloodhound-automation:
+    kind: python-venv-requirements
+    path: bloodhound-automation
+    repo: "https://github.com/Tanguy-Boisset/bloodhound-automation"
+    venv: venv
+    entry: bloodhound-automation.py
+    version_args: null   # meta tool - no version check, skipped by installer
