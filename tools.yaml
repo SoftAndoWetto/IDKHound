@@ -1,0 +1,98 @@
+# Manifest of every third-party tool the orchestrator installs, updates, and
+# invokes. All paths are relative to tools_root. Adding a new tool means
+# adding an entry here - no orchestrator code changes required.
+#
+# kind values and what they mean for install/invoke:
+#   python-venv            - clone, create venv, `pip install .`, invoke as
+#                             {venv}/bin/python {entry}
+#   python-venv-installed  - clone, create venv, `pip install .`, invoke the
+#                             console-script it drops at {venv}/bin/{binary}
+#   python-venv-editable   - clone, create venv, `pip install -e '.[extras]'`,
+#                             invoke the console-script at {venv}/bin/{binary}
+#   python-venv-requirements - clone, create venv, `pip install -r
+#                             requirements.txt`, invoke as
+#                             {venv}/bin/python {entry}
+#   cargo-binary            - clone, `cargo build --release`, invoke the
+#                             compiled binary directly
+#   go-binary                - clone, `go build -o {binary} {package}`,
+#                             invoke the compiled binary directly
+
+tools_root: tools
+
+tools:
+  bloodhound-py:
+    kind: python-venv
+    path: BloodHound.py
+    venv: venv
+    entry: bloodhound.py
+    repo: https://github.com/dirkjanm/BloodHound.py
+    version_cmd: ["--version"]
+    update: [git pull, "pip install ."]
+
+  rusthound-ce:
+    kind: cargo-binary
+    path: RustHound-CE
+    binary: target/release/rusthound-ce
+    repo: https://github.com/g0h4n/RustHound-CE
+    version_cmd: ["--version"]
+    update: [git pull, "cargo build --release"]
+
+  mssqlhound:
+    kind: go-binary
+    path: MSSQLHound
+    binary: mssqlhound
+    repo: "https://github.com/SpecterOps/MSSQLHound"
+    version_cmd: ["--version"]
+    update: [git pull, "go build -o mssqlhound ./cmd/mssqlhound"]
+
+  scomhound:
+    kind: python-venv
+    path: SCOMHound
+    venv: venv
+    entry: scomhound.py
+    repo: "https://github.com/SpecterOps/SCOMHound"
+    version_cmd: [""]  # No version tag
+    update: [""]
+
+  gpohound:
+    kind: python-venv
+    path: GPOHound
+    venv: venv
+    entry: gpohound.py
+    repo: "https://github.com/cogiceo/GPOHound"
+    version_cmd: [""]  # No version tag
+    update: [""]
+
+  gpoparser:
+    kind: python-venv-installed
+    path: gpoParser
+    venv: venv
+    binary: venv/bin/gpoParser
+    repo: "https://github.com/synacktiv/gpoParser"
+    version_cmd: [""]  # No version tag
+    update: [""]
+
+  certihound:
+    kind: python-venv-editable
+    path: certihound
+    venv: venv
+    binary: venv/bin/certihound
+    repo: "https://github.com/0x0Trace/Certihound"
+    version_cmd: ["--version"]
+    update: [""]
+
+  sharehound:
+    kind: go-binary
+    path: sharehound/Go
+    binary: sharehound.exe
+    repo: "https://github.com/p0dalirius/ShareHound"
+    version_cmd: ["--version"]
+    update: [""]
+
+    bloodhound-automation:
+      kind: python-venv-requirements
+      path: bloodhound-automation
+      repo: "https://github.com/Tanguy-Boisset/bloodhound-automation"
+      venv: venv
+      entry: bloodhound-automation.py
+      version_args: null   # meta tool - no version check, skipped by installer
