@@ -67,7 +67,7 @@ tools:
     kind: python-venv-installed
     path: gpoParser
     venv: venv
-    binary: venv/bin/gpoParser
+    binary: gpoParser
     repo: "https://github.com/synacktiv/gpoParser"
     version_cmd: [""]  # No version tag
     update: [""]
@@ -76,18 +76,18 @@ tools:
     kind: python-venv-editable
     path: certihound
     venv: venv
-    binary: venv/bin/certihound
+    binary: certihound
     repo: "https://github.com/0x0Trace/Certihound"
     version_cmd: ["--version"]
     update: [""]
 
   sharehound:
     kind: go-binary
-    path: sharehound/Go
-    binary: sharehound.exe
-    repo: "https://github.com/p0dalirius/ShareHound"
+    path: sharehound
+    binary: sharehound
+    repo: "https://github.com/jazofra/sharehound"
     version_cmd: ["--version"]
-    update: [""]
+    update: [git pull, "go build -C Go -o ../sharehound ./cmd/sharehound"]
 
   bloodhound-automation:
     kind: python-venv-requirements

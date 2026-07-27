@@ -9,27 +9,22 @@ Single entrypoint for the hound-orchestrator. Right now this rigs together:
                    (setup-manual / setup-automate / status / nuke)
   - `run`       -> the collection job matrix (NOT YET BUILT - stubbed below,
                    this is the next piece)
-
-The `run` stub demonstrates the actual rule that matters most: it calls
-bloodhound_manager.require_ready() before doing anything else, and refuses
-to proceed if no instance is configured - and separately checks that tools
-are installed before proceeding. Both checks happen up front, once, not
-scattered per-job later.
 """
 
 import argparse
+import json
 import sys
 
 import bloodhound_manager as bhm
-import bloodhound_manager
+import installer
 import manifest as mf
 
 
 def cmd_install(args):
     manifest_data = mf.load_manifest()
     only = args.only.split(",") if args.only else None
-    results = bloodhound_manager.install_all(manifest_data, only=only, force=args.force)
-    ok = bloodhound_manager.print_summary(results)
+    results = installer.install_all(manifest_data, only=only, force=args.force)
+    ok = installer.print_summary(results)
     sys.exit(0 if ok else 1)
 
 
@@ -37,15 +32,15 @@ def cmd_check(args):
     manifest_data = mf.load_manifest()
     results = []
     for key in mf.all_tool_keys(manifest_data):
-        result = bloodhound_manager.InstallResult(key)
+        result = installer.InstallResult(key)
         try:
             if not mf.is_installed(manifest_data, key):
                 raise RuntimeError("not installed")
-            bloodhound_manager.verify_version(manifest_data, key, result)
+            installer.verify_version(manifest_data, key, result)
         except Exception as e:
             result.error = str(e)
         results.append(result)
-    ok = bloodhound_manager.print_summary(results)
+    ok = installer.print_summary(results)
     sys.exit(0 if ok else 1)
 
 
@@ -59,17 +54,12 @@ def cmd_bh(args):
         if inst is None:
             print("[!] No BloodHound instance configured.")
             sys.exit(1)
-        import json
         print(json.dumps(inst, indent=2))
     elif args.bh_command == "nuke":
         bhm.nuke(args.name, args.yes)
 
 
 def _preflight_checks(manifest_data) -> bool:
-    """
-    The two hard gates, checked once up front, before any job matrix is
-    built. Both must pass before `run` proceeds.
-    """
     ok = True
 
     try:
@@ -96,10 +86,6 @@ def cmd_run(args):
         print("\n[!] Preflight checks failed - fix the above before running collection jobs.")
         sys.exit(1)
 
-    # NOT YET BUILT: job matrix (targets x accounts x tools), state store,
-    # subprocess runner, and the upload step via bloodhound-automation. This
-    # is the next piece to build once install + the BloodHound gate are
-    # confirmed solid.
     print("\n[*] Preflight checks passed. Job matrix / runner is not built yet.")
 
 

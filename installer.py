@@ -1,294 +1,176 @@
-#!/usr/bin/env python3
-"""
-installer.py
-
-Reads tools.yaml and, for each tool: clones it if missing, builds/installs it
-according to its `kind`, then verifies it runs via its version command.
-Failures are isolated per-tool - one broken build doesn't stop the rest of
-the batch, matching how job failures are handled elsewhere in this project.
-
-Usage:
-    python3 installer.py install                # install/build everything
-    python3 installer.py install --only rusthound-ce,mssqlhound
-    python3 installer.py install --force         # rebuild even if present
-    python3 installer.py check                   # verify only, install nothing
-"""
-
-import argparse
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+from dataclasses import dataclass
 
 import manifest as mf
 
-
+@dataclass
 class InstallResult:
-    def __init__(self, key):
-        self.key = key
-        self.cloned = False
-        self.built = False
-        self.verified = False
-        self.error = None
+    tool: str
+    version: str = ""
+    error: str = ""
+    ok: bool = True
 
-    def ok(self):
-        return self.error is None
+def check_prereqs():
+    print("[*] Checking prerequisites...")
+    missing = []
+    
+    if not shutil.which("python3"):
+        missing.append("python3")
+    
+    if not shutil.which("go"):
+        missing.append("go (Install from https://go.dev/dl/)")
+        
+    if not shutil.which("cargo") or not shutil.which("rustc"):
+        missing.append("rust (curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh)")
+        
+    if not shutil.which("krb5-config"):
+        missing.append("libkrb5-dev (sudo apt install -y libkrb5-dev libgssapi-krb5-2 pkg-config)")
+        
+    if missing:
+        print("\n[!] Missing prerequisites:")
+        for m in missing:
+            print(f"    - {m}")
+        print("\nPlease install the missing prerequisites before continuing.")
+        sys.exit(1)
+        
+    print("[+] All prerequisites are installed.\n")
 
+def run_cmd(cmd, cwd=None):
+    print(f"    $ {' '.join(cmd)}")
+    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(res.stderr.strip())
+    return res.returncode == 0
 
-def _run(cmd, cwd=None, description=""):
-    print(f"    $ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"{description or 'command'} failed (exit {result.returncode}):\n"
-            f"{result.stdout}\n{result.stderr}"
-        )
-    return result.stdout
-
-
-def _check_prereq(binary: str):
-    if shutil.which(binary) is None:
-        raise RuntimeError(
-            f"'{binary}' not found on PATH - install it before running this tool's build step"
-        )
-
-
-# --------------------------------------------------------------------------- #
-# Clone
-# --------------------------------------------------------------------------- #
-
-def clone_if_missing(manifest_data: dict, key: str, result: InstallResult):
-    tool = manifest_data["tools"][key]
-    dest = mf.tool_dir(manifest_data, key)
-
-    if dest.exists():
-        print(f"    [*] {key} already cloned at {dest}")
-        return
-
-    repo = tool.get("repo")
-    if not repo:
-        raise RuntimeError(
-            f"No repo URL set for '{key}' in tools.yaml, and it isn't cloned "
-            f"yet at {dest}. Set the repo URL or clone it there manually."
-        )
-
-    _check_prereq("git")
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    _run(["git", "clone", repo, str(dest)], description=f"git clone {key}")
-    result.cloned = True
-    print(f"    [+] Cloned {key} -> {dest}")
-
-
-# --------------------------------------------------------------------------- #
-# Build / install per kind
-# --------------------------------------------------------------------------- #
-
-def _ensure_venv(venv_dir: Path):
-    if venv_dir.exists():
-        return
-    _run([sys.executable, "-m", "venv", str(venv_dir)], description="create venv")
-
-
-def build_python_venv(manifest_data: dict, key: str, result: InstallResult):
-    """kind: python-venv - plain `pip install .` into its own venv."""
-    tool = manifest_data["tools"][key]
-    tdir = mf.tool_dir(manifest_data, key)
-    venv_dir = tdir / tool.get("venv", "venv")
-
-    _ensure_venv(venv_dir)
-    pip = venv_dir / "bin" / "pip"
-    _run([str(pip), "install", "."], cwd=tdir, description=f"pip install . ({key})")
-    result.built = True
-
-
-def build_python_venv_installed(manifest_data: dict, key: str, result: InstallResult):
-    """kind: python-venv-installed - same as above, difference is only in
-    how it's invoked afterward (console-script vs raw entry.py)."""
-    build_python_venv(manifest_data, key, result)
-
-
-def build_python_venv_editable(manifest_data: dict, key: str, result: InstallResult):
-    """kind: python-venv-editable - `pip install -e '.[extras]'`."""
-    tool = manifest_data["tools"][key]
-    tdir = mf.tool_dir(manifest_data, key)
-    venv_dir = tdir / tool.get("venv", "venv")
-    extras = tool.get("editable_extras", "")
-
-    _ensure_venv(venv_dir)
-    pip = venv_dir / "bin" / "pip"
-    _run([str(pip), "install", "-e", f".{extras}"], cwd=tdir,
-         description=f"pip install -e .{extras} ({key})")
-    result.built = True
-
-
-def build_python_venv_requirements(manifest_data: dict, key: str, result: InstallResult):
-    """kind: python-venv-requirements - `pip install -r requirements.txt`."""
-    tool = manifest_data["tools"][key]
-    tdir = mf.tool_dir(manifest_data, key)
-    venv_dir = tdir / tool.get("venv", "venv")
-    req_file = tdir / "requirements.txt"
-
-    _ensure_venv(venv_dir)
-    pip = venv_dir / "bin" / "pip"
-    if req_file.exists():
-        _run([str(pip), "install", "-r", str(req_file)], cwd=tdir,
-             description=f"pip install -r requirements.txt ({key})")
+def install_tool(manifest, key):
+    tool = manifest["tools"][key]
+    kind = tool["kind"]
+    tool_path = mf.tool_dir(manifest, key)
+    tool_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    print(f"\n[*] {key} ({kind})")
+    
+    # 1. Clone if not exists
+    if not tool_path.exists():
+        repo = tool["repo"]
+        if not run_cmd(["git", "clone", repo, str(tool_path)]):
+            return False, f"git clone failed for {key}"
+        print(f"    [+] Cloned {key} -> {tool_path}")
     else:
-        print(f"    [!] No requirements.txt found for {key} - skipping dependency install")
-    result.built = True
+        print(f"    [*] {key} already cloned.")
+        
+    # 2. Build/Setup based on kind
+    if kind in ("python-venv", "python-venv-installed"):
+        venv_path = tool_path / tool.get("venv", "venv")
+        if not venv_path.exists():
+            if not run_cmd([sys.executable, "-m", "venv", str(venv_path)]):
+                return False, f"venv creation failed for {key}"
+        pip = venv_path / "bin" / "pip"
+        if not run_cmd([str(pip), "install", "."], cwd=tool_path):
+            return False, f"pip install . failed for {key}"
+            
+    elif kind == "python-venv-editable":
+        venv_path = tool_path / tool.get("venv", "venv")
+        if not venv_path.exists():
+            if not run_cmd([sys.executable, "-m", "venv", str(venv_path)]):
+                return False, f"venv creation failed for {key}"
+        pip = venv_path / "bin" / "pip"
+        if not run_cmd([str(pip), "install", "-e", "."], cwd=tool_path):
+            return False, f"pip install -e . failed for {key}"
+            
+    elif kind == "python-venv-requirements":
+        venv_path = tool_path / tool.get("venv", "venv")
+        if not venv_path.exists():
+            if not run_cmd([sys.executable, "-m", "venv", str(venv_path)]):
+                return False, f"venv creation failed for {key}"
+        pip = venv_path / "bin" / "pip"
+        reqs = tool_path / "requirements.txt"
+        if not run_cmd([str(pip), "install", "-r", str(reqs)], cwd=tool_path):
+            return False, f"pip install -r requirements.txt failed for {key}"
+            
+    elif kind == "cargo-binary":
+        if not run_cmd(["cargo", "build", "--release"], cwd=tool_path):
+            return False, f"cargo build --release failed for {key}"
+            
+    elif kind == "go-binary":
+        update_cmds = tool.get("update", [])
+        go_build_cmd = None
+        for cmd_str in update_cmds:
+            if "go build" in cmd_str:
+                go_build_cmd = cmd_str
+                break
+                
+        if not go_build_cmd:
+            go_build_cmd = f"go build -o {tool['binary']} ."
+            
+        print(f"    $ {go_build_cmd}")
+        res = subprocess.run(go_build_cmd, cwd=tool_path, capture_output=True, text=True, shell=True)
+        if res.returncode != 0:
+            print(res.stderr.strip())
+            return False, f"go build failed for {key}"
+    else:
+        return False, f"Unknown kind: {kind}"
+        
+    return True, ""
 
-
-def build_cargo_binary(manifest_data: dict, key: str, result: InstallResult):
-    """kind: cargo-binary - `cargo build --release`."""
-    _check_prereq("cargo")
-    tdir = mf.tool_dir(manifest_data, key)
-    _run(["cargo", "build", "--release"], cwd=tdir, description=f"cargo build ({key})")
-    result.built = True
-
-
-def build_go_binary(manifest_data: dict, key: str, result: InstallResult):
-    """kind: go-binary - `go build -o <binary> <package>`."""
-    _check_prereq("go")
-    tool = manifest_data["tools"][key]
-    tdir = mf.tool_dir(manifest_data, key)
-    build_dir = tdir / tool["build_subdir"] if tool.get("build_subdir") else tdir
-    package = tool.get("build_package", ".")
-    binary_name = tool["binary"]
-
-    _run(["go", "build", "-o", binary_name, package], cwd=build_dir,
-         description=f"go build ({key})")
-    result.built = True
-
-
-BUILD_FUNCS = {
-    "python-venv": build_python_venv,
-    "python-venv-installed": build_python_venv_installed,
-    "python-venv-editable": build_python_venv_editable,
-    "python-venv-requirements": build_python_venv_requirements,
-    "cargo-binary": build_cargo_binary,
-    "go-binary": build_go_binary,
-}
-
-
-# --------------------------------------------------------------------------- #
-# Verify
-# --------------------------------------------------------------------------- #
-
-def verify_version(manifest_data: dict, key: str, result: InstallResult):
-    tool = manifest_data["tools"][key]
-    version_args = tool.get("version_args")
-
-    if version_args is None:
-        print(f"    [*] {key} has no version_args set - skipping verification "
-              f"(expected for meta tools like bloodhound-automation)")
-        result.verified = True
-        return
-
-    argv = mf.resolve_invocation(manifest_data, key) + version_args
-    if not Path(argv[0]).exists():
-        raise RuntimeError(f"Resolved binary/interpreter does not exist: {argv[0]}")
-
-    proc = subprocess.run(argv, capture_output=True, text=True)
-    output = (proc.stdout + proc.stderr).strip()
-    print(f"    [+] {key} version check output: {output or '(empty output)'}")
-    # Not gating on returncode == 0 here - some tools' --version exits
-    # non-zero (argparse quirks etc). Existence + output is the useful signal.
-    result.verified = True
-
-
-# --------------------------------------------------------------------------- #
-# Orchestration
-# --------------------------------------------------------------------------- #
-
-def install_tool(manifest_data: dict, key: str, force: bool) -> InstallResult:
-    result = InstallResult(key)
-    tool = manifest_data["tools"][key]
-    print(f"[*] {key} ({tool['kind']})")
-
-    try:
-        clone_if_missing(manifest_data, key, result)
-
-        already_built = mf.is_installed(manifest_data, key)
-        if already_built and not force:
-            print(f"    [*] {key} appears already built - skipping build "
-                  f"(use --force to rebuild)")
-        else:
-            BUILD_FUNCS[tool["kind"]](manifest_data, key, result)
-
-        verify_version(manifest_data, key, result)
-
-    except Exception as e:
-        result.error = str(e)
-        print(f"    [!] {key} FAILED: {e}")
-
-    return result
-
-
-def install_all(manifest_data: dict, only: list = None, force: bool = False) -> list:
-    keys = only if only else mf.all_tool_keys(manifest_data)
+def install_all(manifest, only=None, force=False):
+    check_prereqs()
+    
+    keys = [k for k in manifest["tools"] if (not only or k in only)]
     results = []
+    
     for key in keys:
-        if key not in manifest_data["tools"]:
-            print(f"[!] Skipping unknown tool key '{key}'")
-            continue
-        results.append(install_tool(manifest_data, key, force))
-        print()
+        r = InstallResult(tool=key)
+        success, err = install_tool(manifest, key)
+        if not success:
+            r.ok = False
+            r.error = err
+        results.append(r)
+        
     return results
 
+def verify_version(manifest, key, result):
+    tool = manifest["tools"][key]
+    version_args = tool.get("version_cmd", [])
+    
+    # If version_args is [""], treat it as "call with no args"
+    if version_args == [""]:
+        version_args = []
+        
+    try:
+        argv = mf.resolve_invocation(manifest, key) + version_args
+        # Use a short timeout so it doesn't hang forever waiting for stdin
+        res = subprocess.run(argv, capture_output=True, text=True, timeout=5)
+        
+        # Most tools return 0 on --version, or return 1/2 with help text when called with no args.
+        # As long as we get SOME output, the binary loaded and executed successfully.
+        output = (res.stdout + res.stderr).strip()
+        if output or res.returncode == 0:
+            result.version = "Verified"
+        else:
+            result.error = f"Execution failed (Exit {res.returncode}, no output)"
+            result.ok = False
+    except subprocess.TimeoutExpired:
+        result.error = "Timed out (likely waiting for input)"
+        result.ok = False
+    except Exception as e:
+        result.error = f"Execution error: {e}"
+        result.ok = False
 
-def print_summary(results: list):
-    print("=" * 60)
-    print("INSTALL SUMMARY")
-    print("=" * 60)
+def print_summary(results):
+    print("\n" + "="*60)
+    print("TOOL CHECK SUMMARY")
+    print("="*60)
+    all_ok = True
     for r in results:
-        status = "OK" if r.ok() else f"FAILED ({r.error})"
-        print(f"  {r.key:30s} {status}")
-    failed = [r for r in results if not r.ok()]
-    if failed:
-        print(f"\n{len(failed)} tool(s) failed. Fix those before running collection jobs.")
-    else:
-        print("\nAll tools installed and verified.")
-    return len(failed) == 0
-
-
-def main():
-    parser = argparse.ArgumentParser(description="Install/build/verify all collector tools")
-    sub = parser.add_subparsers(dest="command", required=True)
-
-    p_install = sub.add_parser("install", help="Clone, build, and verify tools")
-    p_install.add_argument("--only", default=None,
-                            help="Comma-separated tool keys to limit to (default: all)")
-    p_install.add_argument("--force", action="store_true",
-                            help="Rebuild even if already installed")
-
-    sub.add_parser("check", help="Verify tools only, without installing anything")
-
-    args = parser.parse_args()
-    manifest_data = mf.load_manifest()
-
-    if args.command == "install":
-        only = args.only.split(",") if args.only else None
-        results = install_all(manifest_data, only=only, force=args.force)
-        ok = print_summary(results)
-        sys.exit(0 if ok else 1)
-
-    elif args.command == "check":
-        results = []
-        for key in mf.all_tool_keys(manifest_data):
-            result = InstallResult(key)
-            print(f"[*] {key}")
-            try:
-                if not mf.is_installed(manifest_data, key):
-                    raise RuntimeError("not installed (binary/interpreter missing)")
-                verify_version(manifest_data, key, result)
-            except Exception as e:
-                result.error = str(e)
-                print(f"    [!] {key} FAILED: {e}")
-            results.append(result)
-            print()
-        ok = print_summary(results)
-        sys.exit(0 if ok else 1)
-
-
-if __name__ == "__main__":
-    main()
+        if r.ok:
+            status = "[+] OK"
+        else:
+            status = f"[!] FAILED ({r.error})"
+            all_ok = False
+        print(f"  {r.tool:<25} {status}")
+    return all_ok
