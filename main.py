@@ -79,12 +79,8 @@ def cmd_update(args):
 def _preflight_checks(manifest_data) -> bool:
     ok = True
 
-    try:
-        inst = bhm.require_ready()
-        print(f"[+] BloodHound instance ready (mode: {inst['mode']})")
-    except bhm.BloodHoundNotReady as e:
-        print(f"[!] {e}")
-        ok = False
+    # BloodHound instance check is removed here so the stateless runner 
+    # can execute and generate JSON/ZIPs without a live BloodHound connection.
 
     missing = [k for k in mf.all_tool_keys(manifest_data) if not mf.is_installed(manifest_data, k)]
     if missing:
