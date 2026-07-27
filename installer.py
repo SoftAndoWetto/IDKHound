@@ -60,6 +60,12 @@ def install_tool(manifest, key):
         if not run_cmd(["git", "clone", repo, str(tool_path)]):
             return False, f"git clone failed for {key}"
         print(f"    [+] Cloned {key} -> {tool_path}")
+
+        branch = tool.get("branch")
+        if branch:
+            if not run_cmd(["git", "checkout", branch], cwd=tool_path):
+                return False, f"git checkout {branch} failed for {key}"
+            print(f"    [+] Checked out branch '{branch}'")
     else:
         print(f"    [*] {key} already cloned.")
         

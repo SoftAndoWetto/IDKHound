@@ -11,9 +11,10 @@ tools:
     venv: venv
     entry: bloodhound.py
     repo: https://github.com/dirkjanm/BloodHound.py.git
+    branch: bloodhound-ce
     version_cmd: ["--version"]
     update: ["git checkout bloodhound-ce", "git pull", "pip install ."]
-    command_template: "-d {domain} -u {username} -p {password} -dc {dc_ip} --zip"
+    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --zip"
 
   rusthound-ce:
     kind: cargo-binary
