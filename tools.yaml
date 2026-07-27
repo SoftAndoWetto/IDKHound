@@ -78,14 +78,16 @@ tools:
     update: [git pull, "venv/bin/pip install -e ."]
     command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip}"
 
-  sharehound:
-    kind: go-binary
-    path: sharehound
-    binary: sharehound
-    repo: "https://github.com/jazofra/sharehound"
-    version_cmd: ["--version"]
-    update: [git pull, "go build -C Go -o ../sharehound ./cmd/sharehound"]
-    command_template: "--auth-domain {domain} --auth-user {username} --auth-password {password} --auth-dc-ip {dc_ip} --subnets -o {output_dir}/sharehound.zip"
+################# lowk no point #################
+#	sharehound:
+#	    kind: go-binary
+#	    path: sharehound
+#	    binary: sharehound
+#	    repo: "https://github.com/jazofra/sharehound"
+#	    version_cmd: ["--version"]
+#	    update: [git pull, "go build -C Go -o ../sharehound ./cmd/sharehound"]
+#	    command_template: "--auth-domain {domain} --auth-user {username} --auth-password {password} --auth-dc-ip {dc_ip} --subnets -o {output_dir}/sharehound.zip"
+################# lowk no point #################
 
   bloodhound-automation:
     kind: python-venv-requirements
