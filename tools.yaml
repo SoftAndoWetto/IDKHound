@@ -64,7 +64,7 @@ tools:
     version_cmd: [""]  # No version tag
     update: [git pull, "venv/bin/pip install ."]
     # Uses 'remote' subcommand
-    command_template: "remote -d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
+    command_template: "remote -d {domain} -u {username} -p {password} -s {dc_ip}"
 
   certihound:
     kind: python-venv-editable
