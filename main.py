@@ -7,17 +7,18 @@ Single entrypoint for the hound-orchestrator. Right now this rigs together:
   - `check`     -> installer.py: verify only, no installing
   - `bh ...`    -> bloodhound_manager.py: the BloodHound instance gate
                    (setup-manual / setup-automate / status / nuke)
-  - `run`       -> the collection job matrix (NOT YET BUILT - stubbed below,
-                   this is the next piece)
+  - `run`       -> the collection job runner (stateless execution for testing)
 """
 
 import argparse
 import json
 import sys
+from pathlib import Path
 
 import bloodhound_manager as bhm
 import installer
 import manifest as mf
+import runner
 import update as upd
 
 
@@ -102,7 +103,34 @@ def cmd_run(args):
         print("\n[!] Preflight checks failed - fix the above before running collection jobs.")
         sys.exit(1)
 
-    print("\n[*] Preflight checks passed. Job matrix / runner is not built yet.")
+    # Default to every tool in the manifest
+    if args.tools:
+        tools = [t.strip() for t in args.tools.split(",") if t.strip()]
+    else:
+        tools = mf.all_tool_keys(manifest_data)
+
+    # Validate requested tools exist in manifest
+    unknown = [t for t in tools if t not in manifest_data.get("tools", {})]
+    if unknown:
+        print(f"[!] Unknown tool(s): {', '.join(unknown)}")
+        print(f"    Available: {', '.join(mf.all_tool_keys(manifest_data))}")
+        sys.exit(1)
+
+    # Skip bloodhound-automation — it's a meta/upload tool, not a collector
+    tools = [t for t in tools if manifest_data["tools"][t].get("command_template")]
+
+    run_args = runner.RunArgs(
+        domain=args.domain,
+        dc_ip=args.dc_ip,
+        username=args.username,
+        password=args.password,
+        tools=tools,
+        data_dir=Path("data"),
+        log_dir=Path("logs"),
+    )
+
+    ok = runner.run(run_args, manifest_data)
+    sys.exit(0 if ok else 1)
 
 
 def build_parser():
@@ -141,13 +169,13 @@ def build_parser():
 
     p_bh.set_defaults(func=cmd_bh)
 
-    p_run = sub.add_parser("run", help="Run collection jobs (preflight-checked)")
+    p_run = sub.add_parser("run", help="Run collection jobs (stateless test runner)")
     p_run.add_argument("--domain", required=True, help="Target domain (e.g. corp.local)")
     p_run.add_argument("--dc-ip", required=True, help="Domain controller IP")
     p_run.add_argument("--username", required=True, help="Username for authentication")
     p_run.add_argument("--password", required=True, help="Password for authentication")
     p_run.add_argument("--tools", default=None, help="Comma-separated list of tools to run (default: all)")
-    p_run.add_argument("--force", action="store_true", help="Re-run jobs even if already done")
+    p_run.add_argument("--force", action="store_true", help="Ignored in stateless runner, kept for CLI compatibility")
     p_run.set_defaults(func=cmd_run)
 
     return parser
