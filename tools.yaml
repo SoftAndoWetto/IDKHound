@@ -5,16 +5,17 @@
 tools_root: tools
 
 tools:
-  bloodhound-py:
-    kind: python-venv
-    path: BloodHound.py
-    venv: venv
-    entry: bloodhound.py
-    repo: https://github.com/dirkjanm/BloodHound.py.git
-    branch: bloodhound-ce
-    version_cmd: ["--version"]
-    update: ["git checkout bloodhound-ce", "git pull", "pip install ."]
-    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --zip"
+#  bloodhound-py:
+#    kind: python-venv
+#    path: BloodHound.py
+#    venv: venv
+#    entry: bloodhound.py
+#    repo: https://github.com/dirkjanm/BloodHound.py.git
+#    branch: bloodhound-ce
+#    version_cmd: ["--version"]
+#    update: ["git checkout bloodhound-ce", "git pull", "pip install ."]
+#    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --zip"
+#    Until this 1) gets an outpit dir flag and 2) isnt on a branch that isnt master, im not implementing it
 
   rusthound-ce:
     kind: cargo-binary
