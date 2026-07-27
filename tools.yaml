@@ -53,7 +53,7 @@ tools:
     repo: "https://github.com/cogiceo/GPOHound"
     version_cmd: [""]  # No version tag
     update: [git pull, "venv/bin/pip install ."]
-    command_template: "ldap -d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
+    command_template: "ldap -d {domain} -u {username} -p {password} --dc {dc_ip}"
 
   gpoparser:
     kind: python-venv-installed
