@@ -39,6 +39,7 @@ def cmd_check(args):
             installer.verify_version(manifest_data, key, result)
         except Exception as e:
             result.error = str(e)
+            result.ok = False
         results.append(result)
     ok = installer.print_summary(results)
     sys.exit(0 if ok else 1)
