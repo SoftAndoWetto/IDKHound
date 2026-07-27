@@ -52,7 +52,7 @@ tools:
     entry: scomhound.py
     repo: "https://github.com/SpecterOps/SCOMHound"
     version_cmd: [""]  # No version tag
-    update: [""]
+    update: [git pull, "venv/bin/pip install ."]
 
   gpohound:
     kind: python-venv
@@ -61,7 +61,7 @@ tools:
     entry: gpohound.py
     repo: "https://github.com/cogiceo/GPOHound"
     version_cmd: [""]  # No version tag
-    update: [""]
+    update: [git pull, "venv/bin/pip install ."]
 
   gpoparser:
     kind: python-venv-installed
@@ -70,7 +70,7 @@ tools:
     binary: gpoParser
     repo: "https://github.com/synacktiv/gpoParser"
     version_cmd: [""]  # No version tag
-    update: [""]
+    update: [git pull, "venv/bin/pip install ."]
 
   certihound:
     kind: python-venv-editable
@@ -79,7 +79,7 @@ tools:
     binary: certihound
     repo: "https://github.com/0x0Trace/Certihound"
     version_cmd: ["--version"]
-    update: [""]
+    update: [git pull, "venv/bin/pip install -e ."]
 
   sharehound:
     kind: go-binary

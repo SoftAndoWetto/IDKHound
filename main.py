@@ -18,6 +18,7 @@ import sys
 import bloodhound_manager as bhm
 import installer
 import manifest as mf
+import update as upd
 
 
 def cmd_install(args):
@@ -58,6 +59,20 @@ def cmd_bh(args):
         print(json.dumps(inst, indent=2))
     elif args.bh_command == "nuke":
         bhm.nuke(args.name, args.yes)
+
+
+def cmd_update(args):
+    manifest_data = mf.load_manifest()
+    only = args.only.split(",") if args.only else None
+
+    if args.update_command == "check":
+        results = upd.check_all(manifest_data, only=only)
+        upd.print_check(results)
+        sys.exit(1 if any(st.error for st in results) else 0)
+
+    elif args.update_command == "update":
+        ok = upd.update_all(manifest_data, only=only, force=args.force)
+        sys.exit(0 if ok else 1)
 
 
 def _preflight_checks(manifest_data) -> bool:
@@ -125,6 +140,18 @@ def build_parser():
     p_nuke.add_argument("-y", "--yes", action="store_true")
 
     p_bh.set_defaults(func=cmd_bh)
+
+    p_update = sub.add_parser("update", help="Check tool versions by commit hash, and update+rebuild them")
+    update_sub = p_update.add_subparsers(dest="update_command", required=True)
+
+    p_upd_check = update_sub.add_parser("check", help="Compare local HEAD vs remote HEAD for all tools")
+    p_upd_check.add_argument("--only", default=None, help="Comma-separated tool keys")
+
+    p_upd_run = update_sub.add_parser("update", help="git pull + rebuild/reinstall tools that are behind")
+    p_upd_run.add_argument("--only", default=None, help="Comma-separated tool keys")
+    p_upd_run.add_argument("--force", action="store_true", help="Rebuild even if already up to date")
+
+    p_update.set_defaults(func=cmd_update)
 
     p_run = sub.add_parser("run", help="Run collection jobs (preflight-checked)")
     p_run.set_defaults(func=cmd_run)

@@ -43,7 +43,7 @@ DEFAULT_WP = 8001    # web port
 # bloodhound-automation uses a static default password when --password isn't
 # passed. Set this to match that real default before relying on it - if you
 # always pass --password yourself, this constant never gets used.
-DEFAULT_AUTOMATE_PASSWORD = "CHANGE_ME_TO_REAL_DEFAULT"
+DEFAULT_AUTOMATE_PASSWORD = "Password123!"
 
 PROJECTS_DIR = BH_AUTOMATE_DIR / "projects"
 
@@ -228,32 +228,38 @@ def nuke(name: str, assume_yes: bool = False):
 
     print(f"[*] Nuking everything matching '{name}'...")
 
-    ids = _docker_list("ps", "-a", "-q", "--filter", f"name={name}")
+    # Docker Compose lowercases project names for containers/networks, 
+    # so we check for both the exact name and the lowercase version to be safe.
+    names_to_check = {name, name.lower()}
+    
+    ids = set()
+    for n in names_to_check:
+        ids.update(_docker_list("ps", "-a", "-q", "--filter", f"name={n}"))
     if ids:
         _docker_run("rm", "-f", *ids)
         print(f"[+] Removed {len(ids)} container(s).")
     else:
         print("[*] No matching containers found.")
 
-    vols = _docker_list("volume", "ls", "-q", "--filter", f"name={name}")
+    vols = set()
+    for n in names_to_check:
+        vols.update(_docker_list("volume", "ls", "-q", "--filter", f"name={n}"))
     if vols:
         _docker_run("volume", "rm", "-f", *vols)
         print(f"[+] Removed {len(vols)} volume(s).")
     else:
         print("[*] No matching volumes found.")
 
-    nets = _docker_list("network", "ls", "-q", "--filter", f"name={name}")
+    nets = set()
+    for n in names_to_check:
+        nets.update(_docker_list("network", "ls", "-q", "--filter", f"name={n}"))
     if nets:
         _docker_run("network", "rm", *nets)
         print(f"[+] Removed {len(nets)} network(s).")
     else:
         print("[*] No matching networks found.")
 
-    # Local project state (project.pkl etc.) - this is the part that matters
-    # most for the "spun up but not properly, then lingers" scenario. A
-    # broken container can leave stale local state behind even after docker
-    # itself is clean, and that stale state can confuse the next
-    # setup-automate run regardless of what docker looks like.
+    # Local project state (project.pkl etc.)
     project_dir = PROJECTS_DIR / name
     if project_dir.exists():
         import shutil
