@@ -45,26 +45,28 @@ tools:
     update: [git pull, "venv/bin/pip install ."]
     command_template: "-d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
 
-  gpohound:
-    kind: python-venv
-    path: GPOHound
-    venv: venv
-    entry: gpohound.py
-    repo: "https://github.com/cogiceo/GPOHound"
-    version_cmd: [""]  # No version tag
-    update: [git pull, "venv/bin/pip install ."]
-    command_template: "ldap -d {domain} -u {username} -p {password} --dc {dc_ip}"
-
-  gpoparser:
-    kind: python-venv-installed
-    path: gpoParser
-    venv: venv
-    binary: gpoParser
-    repo: "https://github.com/synacktiv/gpoParser"
-    version_cmd: [""]  # No version tag
-    update: [git pull, "venv/bin/pip install ."]
-    # Uses 'remote' subcommand
-    command_template: "remote -d {domain} -u {username} -p {password} -s {dc_ip}"
+################# QUARANTINE #################
+#  gpohound:
+#	    kind: python-venv
+#	    path: GPOHound
+#	    venv: venv
+#	    entry: gpohound.py
+#	    repo: "https://github.com/cogiceo/GPOHound"
+#	    version_cmd: [""]  # No version tag
+#	    update: [git pull, "venv/bin/pip install ."]
+#	    command_template: "ldap -d {domain} -u {username} -p {password} --dc {dc_ip}"
+#
+#	 gpoparser:
+#	     kind: python-venv-installed
+#	     path: gpoParser
+#	     venv: venv
+#	     binary: gpoParser
+#	     repo: "https://github.com/synacktiv/gpoParser"
+#	     version_cmd: [""]  # No version tag
+#	     update: [git pull, "venv/bin/pip install ."]
+#	     # Uses 'remote' subcommand
+#	     command_template: "remote -d {domain} -u {username} -p {password} -s {dc_ip}"
+################# QUARANTINE #################
 
   certihound:
     kind: python-venv-editable
