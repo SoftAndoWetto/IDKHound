@@ -74,7 +74,7 @@ tools:
     repo: "https://github.com/0x0Trace/Certihound"
     version_cmd: ["--version"]
     update: [git pull, "venv/bin/pip install -e ."]
-    command_template: "-d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
+    command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip}"
 
   sharehound:
     kind: go-binary
