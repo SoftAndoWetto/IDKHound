@@ -141,19 +141,13 @@ def build_parser():
 
     p_bh.set_defaults(func=cmd_bh)
 
-    p_update = sub.add_parser("update", help="Check tool versions by commit hash, and update+rebuild them")
-    update_sub = p_update.add_subparsers(dest="update_command", required=True)
-
-    p_upd_check = update_sub.add_parser("check", help="Compare local HEAD vs remote HEAD for all tools")
-    p_upd_check.add_argument("--only", default=None, help="Comma-separated tool keys")
-
-    p_upd_run = update_sub.add_parser("update", help="git pull + rebuild/reinstall tools that are behind")
-    p_upd_run.add_argument("--only", default=None, help="Comma-separated tool keys")
-    p_upd_run.add_argument("--force", action="store_true", help="Rebuild even if already up to date")
-
-    p_update.set_defaults(func=cmd_update)
-
     p_run = sub.add_parser("run", help="Run collection jobs (preflight-checked)")
+    p_run.add_argument("--domain", required=True, help="Target domain (e.g. corp.local)")
+    p_run.add_argument("--dc-ip", required=True, help="Domain controller IP")
+    p_run.add_argument("--username", required=True, help="Username for authentication")
+    p_run.add_argument("--password", required=True, help="Password for authentication")
+    p_run.add_argument("--tools", default=None, help="Comma-separated list of tools to run (default: all)")
+    p_run.add_argument("--force", action="store_true", help="Re-run jobs even if already done")
     p_run.set_defaults(func=cmd_run)
 
     return parser
