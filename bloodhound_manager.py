@@ -161,12 +161,13 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
 
 
     # Note need to add checks for 
-    sudo apt install docker.io
-    sudo apt install docker-compose
-    sudo usermod -aG docker $USER
-    sudo systemctl start docker
-    sudo systemctl enable docker
-    sudo systemctl status docker
+    #sudo apt install docker.io
+    #sudo apt install docker-compose
+    #sudo usermod -aG docker $USER
+    #sudo systemctl start docker
+    #sudo systemctl enable docker
+    #sudo systemctl status docker
+    #newgrp docker (Or some other way to reload idk)
     if not mf.is_installed(_manifest, BH_AUTOMATE_KEY):
         print(f"[!] bloodhound-automation isn't installed. Run:\n"
               f"    python3 installer.py install --only {BH_AUTOMATE_KEY}")
