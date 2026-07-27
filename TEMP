@@ -1,0 +1,55 @@
+┌──(kali㉿kali)-[~/Desktop/IDKHound]
+└─$ # wipe the wrong (master/legacy) clone
+rm -rf tools/BloodHound.py
+
+# let install re-clone (default branch), then immediately switch it via update
+python3 main.py install --only bloodhound-py
+python3 main.py update update --only bloodhound-py
+[*] Checking prerequisites...
+[+] All prerequisites are installed.
+
+
+[*] bloodhound-py (python-venv)
+    $ git clone https://github.com/dirkjanm/BloodHound.py.git /home/kali/Desktop/IDKHound/tools/BloodHound.py
+    [+] Cloned bloodhound-py -> /home/kali/Desktop/IDKHound/tools/BloodHound.py
+    $ /usr/bin/python3 -m venv /home/kali/Desktop/IDKHound/tools/BloodHound.py/venv
+    $ /home/kali/Desktop/IDKHound/tools/BloodHound.py/venv/bin/pip install .
+
+============================================================
+TOOL CHECK SUMMARY
+============================================================
+  bloodhound-py             [+] OK
+usage: main.py [-h] {install,check,bh,run} ...
+main.py: error: argument command: invalid choice: 'update' (choose from install, check, bh, run)
+                                                                                                                                                                                                                   
+┌──(kali㉿kali)-[~/Desktop/IDKHound]
+└─$ python3 main.py run --domain CONTROLLER.local --dc-ip 10.129.153.14 --username Administrator --password 'P@$$W0rd' --tools bloodhound-py
+[+] BloodHound instance ready (mode: automate)
+[+] All manifest tools are installed.
+
+[*] 1 job(s) queued.
+
+[*] Running bloodhound-py for CONTROLLER.local / Administrator...
+    [>] Command: /home/kali/Desktop/IDKHound/tools/BloodHound.py/venv/bin/python /home/kali/Desktop/IDKHound/tools/BloodHound.py/bloodhound.py -d CONTROLLER.local -u Administrator -p 'P@$$W0rd' -dc 10.129.153.14 --zip
+
+    ------------------------------------------------------------
+INFO: BloodHound.py for BloodHound LEGACY (BloodHound 4.2 and 4.3)
+WARNING: Could not find a global catalog server, assuming the primary DC has this role
+If this gives errors, either specify a hostname with -gc or disable gc resolution with --disable-autogc
+ERROR: The specified domain controller 10.129.153.14 looks like an IP address, but requires a hostname (FQDN).
+Use the -ns flag to specify a DNS server IP if the hostname does not resolve on your default nameserver.
+    ------------------------------------------------------------
+    [!] bloodhound-py: failed (exit code 1)
+
+==========================================================================
+RUN SUMMARY
+==========================================================================
+  bloodhound-py      executed
+==========================================================================
+                                                                                                                                                                                                                   
+┌──(kali㉿kali)-[~/Desktop/IDKHound]
+└─$ cd tools/BloodHound.py 
+                                                                                                                                                                                                                   
+┌──(kali㉿kali)-[~/Desktop/IDKHound/tools/BloodHound.py]
+└─$ git branch --show-current
+master
