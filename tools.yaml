@@ -62,15 +62,18 @@ tools:
     command_template: "-d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
 
 ################# QUARANTINE #################
-#  gpohound:
-#	    kind: python-venv
-#	    path: GPOHound
-#	    venv: venv
-#	    entry: gpohound.py
-#	    repo: "https://github.com/cogiceo/GPOHound"
-#	    version_cmd: [""]  # No version tag
-#	    update: [git pull, "venv/bin/pip install ."]
-#	    command_template: "ldap -d {domain} -u {username} -p {password} --dc {dc_ip}"
+  gpohound:
+    kind: python-venv
+    path: GPOHound
+    venv: venv
+    entry: gpohound.py
+    repo: "https://github.com/SoftAndoWetto/GPOHound"
+    version_cmd: [""]   #No version tag
+    install:
+      - "python3 -m venv {venv}"
+      - "{pip} install -e ."
+    update: [git pull, "venv/bin/pip install ."]
+    command_template: "full -d {domain} -u {username} -p {password} --dc {dc_ip} --output-dir {output_dir} --zip-name gpohound.zip"
 #
 #	 gpoparser:
 #	     kind: python-venv-installed
@@ -95,7 +98,7 @@ tools:
       - "python3 -m venv {venv}"
       - "{pip} install -e ."
     update: [git pull, "venv/bin/pip install -e ."]
-    command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip} -o {output_dir}/certihound.zip --format zip"
+    command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip} -o {output_dir} --format zip"
 
 ################# lowk no point #################
 #	sharehound:
@@ -110,7 +113,7 @@ tools:
 
   ConfigManBearPig:
     kind: python-venv
-    path: ConfigManBearPig
+    path: python/ConfigManBearPig
     venv: venv
     entry: configmanbearpig.py
     repo: https://github.com/SpecterOps/ConfigManBearPig.git
@@ -121,7 +124,7 @@ tools:
       - "python3 -m venv {venv}"
       - "{pip} install python/."
     update: ["git checkout python", "git pull", "{pip} install python/."]
-    command_template: "-d {domain} -u {username} -p {password} -dc {dc_ip} --zip -o {output_dir}"
+    command_template: "-d {domain} -u {username} -p {password} -dc {dc_ip} -o {output_dir}"
 
 
 # Note: I think I also need LDAPS flag (optional) for every tool and exclude those that dont have one when the flag is specified
