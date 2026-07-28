@@ -95,7 +95,7 @@ tools:
       - "python3 -m venv {venv}"
       - "{pip} install -e ."
     update: [git pull, "venv/bin/pip install -e ."]
-    command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip}"
+    command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip} -o {output_dir}/certihound.zip --format zip"
 
 ################# lowk no point #################
 #	sharehound:

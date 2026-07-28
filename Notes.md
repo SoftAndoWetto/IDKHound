@@ -339,3 +339,5 @@ Draft the orchestrator skeleton:
 
 - When checking install if its a branch (Like ConfigManBearPig or BloodHound.py) add a check to make sure theyre in the right brach just in case
 - Also add -u, -p and -d as instead of only --username, --password and --domain
+- Also add a check that at peast the domain is in the hosts file so it can resolve properly
+- ConfigManBeadPig needs sudo so it can UDP broadcast so also need to do that
