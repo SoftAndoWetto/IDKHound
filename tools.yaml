@@ -10,7 +10,7 @@ tools:
     path: BloodHound.py
     venv: venv
     entry: bloodhound.py
-    repo: https://github.com/dirkjanm/BloodHound.py.git
+    repo: https://github.com/SoftAndoWetto/BloodHound.py/
     branch: bloodhound-ce
     version_cmd: ["--version"]
     install:
@@ -24,7 +24,7 @@ tools:
     # fix that runtime limitation - runner.py would need a per-tool cwd
     # (probably {output_dir}) before this can safely run alongside other
     # jobs without clobbering/mixing output.
-    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --zip"
+    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --dns-tcp -o {output_dir}/bloodhound.zip"
 
   rusthound-ce:
     kind: cargo-binary

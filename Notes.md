@@ -336,3 +336,6 @@ Draft the orchestrator skeleton:
 - Make sure that you cant run any of the tools without first having a bloodhound instance (either configured manually with the details or using bloodhound automate which also stores the details in the same location but is set up automatically)
 - Adding a feature to absolutely nuke bloodhound-automate completely (containers, volumes, everything) incase anything happens with it as it has with me
 - Bloodhound-automate will be created with this command "python3 bloodhound-automation.py start -bp 10001 -np 10501 -wp 8001 <Name>" leave the numbers as default but give the optional flag to change them, also making sure these get stored once the container is up and working (bh-automate will list the credentials when it is)
+
+- When checking install if its a branch (Like ConfigManBearPig or BloodHound.py) add a check to make sure theyre in the right brach just in case
+- Also add -u, -p and -d as instead of only --username, --password and --domain
