@@ -16,7 +16,6 @@ lines at a time.
 
 import shlex
 import sys
-import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -114,8 +113,7 @@ def run(args: RunArgs, manifest_data: dict) -> bool:
             live.ok_line(f"{tool_key}: done")
 
         if i < len(args.tools) - 1 and DELAY_SECONDS > 0:
-            live.info_line(f"Waiting {DELAY_SECONDS}s before next tool...\n")
-            time.sleep(DELAY_SECONDS)
+            live.wait_countdown(DELAY_SECONDS, label=f"Waiting {DELAY_SECONDS}s before next tool")
 
     width = 74
     print("\n" + live.colorize("=" * width, live.C.DIM))

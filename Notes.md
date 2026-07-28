@@ -337,10 +337,9 @@ Draft the orchestrator skeleton:
 - Adding a feature to absolutely nuke bloodhound-automate completely (containers, volumes, everything) incase anything happens with it as it has with me
 - Bloodhound-automate will be created with this command "python3 bloodhound-automation.py start -bp 10001 -np 10501 -wp 8001 <Name>" leave the numbers as default but give the optional flag to change them, also making sure these get stored once the container is up and working (bh-automate will list the credentials when it is)
 
-- When checking install if its a branch (Like ConfigManBearPig or BloodHound.py) add a check to make sure theyre in the right brach just in case
-- Also add -u, -p and -d as instead of only --username, --password and --domain
-- Also add a check that at peast the domain is in the hosts file so it can resolve properly
-- ConfigManBeadPig needs sudo so it can UDP broadcast so also need to do that
-- Add an update check for the actual IDKHound tool itself too see if its the latest version and if not then it updates the files to the new ones (saves having to recompile binaries)
-- Improve the install checks for existing tools like if they run install have the check against existing tools if present or not faster
-- rename setup-automate to just auto
+
+
+
+
+
+- Need to add updated text to the bloodhound manager stuff as well

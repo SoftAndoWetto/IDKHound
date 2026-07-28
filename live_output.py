@@ -111,6 +111,37 @@ def info_line(msg: str):
     print(f"  {_c('·', C.CYAN)} {msg}")
 
 
+def wait_countdown(seconds: float, label: str = "Waiting {s}s before next tool", tick: float = 0.4):
+    """
+    Shows '<label> .' -> '..' -> '...' -> '.' cycling in place while
+    sleeping, then clears the line entirely - so it doesn't leave any
+    trace behind once the next tool's panel starts right where this line
+    was. Falls back to a single static line + a plain sleep on a non-tty
+    (nothing to animate/clear there).
+    """
+    text = f"  {label.format(s=seconds)}"
+    if not sys.stdout.isatty():
+        print(_c(f"{text}...", C.CYAN))
+        time.sleep(seconds)
+        return
+
+    dots_cycle = [".", "..", "..."]
+    elapsed = 0.0
+    i = 0
+    while elapsed < seconds:
+        dots = dots_cycle[i % len(dots_cycle)]
+        sys.stdout.write("\r" + _CLEAR_LINE + _c(f"{text}{dots}", C.CYAN))
+        sys.stdout.flush()
+        step = min(tick, seconds - elapsed)
+        time.sleep(step)
+        elapsed += step
+        i += 1
+    # Clear the line completely rather than leaving a final "..." sitting
+    # there once the wait is over.
+    sys.stdout.write("\r" + _CLEAR_LINE)
+    sys.stdout.flush()
+
+
 # --------------------------------------------------------------------------- #
 # Rolling panel
 # --------------------------------------------------------------------------- #
