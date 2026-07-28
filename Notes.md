@@ -341,3 +341,6 @@ Draft the orchestrator skeleton:
 - Also add -u, -p and -d as instead of only --username, --password and --domain
 - Also add a check that at peast the domain is in the hosts file so it can resolve properly
 - ConfigManBeadPig needs sudo so it can UDP broadcast so also need to do that
+- Add an update check for the actual IDKHound tool itself too see if its the latest version and if not then it updates the files to the new ones (saves having to recompile binaries)
+- Improve the install checks for existing tools like if they run install have the check against existing tools if present or not faster
+- rename setup-automate to just auto

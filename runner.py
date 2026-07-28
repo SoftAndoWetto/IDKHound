@@ -62,6 +62,10 @@ def render_command(manifest_data: dict, tool_key: str, args: RunArgs) -> list:
         rendered_tokens.append(tok)
 
     prefix = mf.resolve_invocation(manifest_data, tool_key)
+    if tool.get("sudo"):
+        # e.g. ConfigManBearPig needs to raw-socket UDP broadcast for
+        # SCCM/MECM discovery - unprivileged sockets can't do that.
+        prefix = ["sudo"] + prefix
     return prefix + rendered_tokens
 
 

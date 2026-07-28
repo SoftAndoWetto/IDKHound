@@ -119,6 +119,10 @@ tools:
     repo: https://github.com/SpecterOps/ConfigManBearPig.git
     branch: python
     version_cmd: ["--version"]
+    # Needs to send/receive raw UDP broadcast (SCCM/MECM discovery), which
+    # needs a raw socket - runner.py prefixes its argv with `sudo` because
+    # of this flag. Every other tool in this manifest runs unprivileged.
+    sudo: true
     install:
       - "git checkout python"
       - "python3 -m venv {venv}"

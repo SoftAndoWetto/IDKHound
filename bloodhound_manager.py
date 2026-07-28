@@ -97,7 +97,7 @@ def require_ready() -> dict:
         raise BloodHoundNotReady(
             "No BloodHound instance is configured. Set one up first:\n"
             "  bloodhound_manager.py setup-manual --url ... --user ... --password-env ...\n"
-            "  bloodhound_manager.py setup-automate <Name>\n"
+            "  bloodhound_manager.py auto <Name>\n"
         )
     return inst
 
@@ -312,7 +312,7 @@ def main():
                            help="Name of the env var holding the password (never the raw value)")
     p_manual.add_argument("--neo4j-url", default=None)
 
-    p_auto = sub.add_parser("setup-automate", help="Spin up bloodhound-automate and register it")
+    p_auto = sub.add_parser("auto", help="Spin up bloodhound-automate and register it")
     p_auto.add_argument("name")
     p_auto.add_argument("-bp", type=int, default=DEFAULT_BP, help=f"Bolt port (default {DEFAULT_BP})")
     p_auto.add_argument("-np", type=int, default=DEFAULT_NP, help=f"Neo4j port (default {DEFAULT_NP})")
@@ -330,7 +330,7 @@ def main():
 
     if args.command == "setup-manual":
         setup_manual(args.url, args.user, args.password_env, args.neo4j_url)
-    elif args.command == "setup-automate":
+    elif args.command == "auto":
         setup_automate(args.name, args.bp, args.np, args.wp, args.password)
     elif args.command == "status":
         inst = load_instance()

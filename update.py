@@ -30,6 +30,9 @@ from pathlib import Path
 import installer
 import manifest as mf
 
+# The IDKHound orchestrator's own repo root (this file lives at the top of it).
+SELF_ROOT = Path(__file__).resolve().parent
+
 
 # --------------------------------------------------------------------------- #
 # Git plumbing
@@ -116,6 +119,63 @@ def check_tool(manifest_data: dict, key: str) -> ToolStatus:
 def check_all(manifest_data: dict, only=None) -> list:
     keys = [k for k in mf.all_tool_keys(manifest_data) if (not only or k in only)]
     return [check_tool(manifest_data, k) for k in keys]
+
+
+# --------------------------------------------------------------------------- #
+# Self-update - checks/updates the IDKHound orchestrator's own source, not
+# the third-party tools it manages. This is plain Python source with no
+# build/compile step, so an update here is just `git pull`, no recompiling
+# any binaries the way a tool update would.
+# --------------------------------------------------------------------------- #
+
+def self_check():
+    """
+    Returns (local_sha, remote_sha, error). Compares this repo's checked-out
+    HEAD against whatever HEAD currently points to on its own `origin`
+    remote - same ls-remote approach as check_tool(), just pointed at
+    SELF_ROOT instead of a tools.yaml entry.
+    """
+    try:
+        local = local_commit(SELF_ROOT)
+    except GitError as e:
+        return None, None, f"local check failed: {e}"
+
+    try:
+        remote_url = _git(["config", "--get", "remote.origin.url"], cwd=SELF_ROOT)
+    except GitError as e:
+        return local, None, f"couldn't determine origin remote: {e}"
+
+    try:
+        remote = remote_commit(remote_url)
+    except GitError as e:
+        return local, None, f"remote check failed: {e}"
+
+    return local, remote, None
+
+
+def self_update(force: bool = False) -> bool:
+    local, remote, err = self_check()
+    if err:
+        print(f"[!] IDKHound self-update check failed: {err}")
+        return False
+
+    if not force and local == remote:
+        print(f"[*] IDKHound is already up to date ({local[:10]}).")
+        return True
+
+    print("[*] Pulling latest IDKHound source...")
+    try:
+        _git(["pull"], cwd=SELF_ROOT)
+    except GitError as e:
+        print(f"[!] IDKHound self-update: git pull failed - {e}")
+        return False
+
+    try:
+        new_commit = local_commit(SELF_ROOT)
+        print(f"[+] IDKHound updated, now at {new_commit[:10]}. No rebuild needed - it's pure Python.")
+    except GitError:
+        print("[+] IDKHound updated. No rebuild needed - it's pure Python.")
+    return True
 
 
 # --------------------------------------------------------------------------- #

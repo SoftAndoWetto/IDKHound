@@ -46,16 +46,56 @@ def run_cmd(cmd, cwd=None):
         print(res.stderr.strip())
     return res.returncode == 0
 
-def install_tool(manifest, key):
+def _current_branch(tool_path):
+    """Cheap `git rev-parse --abbrev-ref HEAD` - no fetch, no mutation."""
+    res = subprocess.run(["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                          cwd=tool_path, capture_output=True, text=True)
+    return res.stdout.strip() if res.returncode == 0 else None
+
+def ensure_branch(tool, tool_path):
+    """
+    If tools.yaml pins a branch for this tool (e.g. bloodhound-py's
+    'bloodhound-ce', ConfigManBearPig's 'python'), make sure the clone is
+    actually sitting on it - not just cloned once and left wherever HEAD
+    happened to land. Just a rev-parse + optional checkout, no rebuild,
+    so it's safe to run on every install/skip pass.
+    """
+    branch = tool.get("branch")
+    if not branch:
+        return True
+    current = _current_branch(tool_path)
+    if current == branch:
+        print(f"    [+] On correct branch '{branch}'")
+        return True
+    print(f"    [!] On branch '{current or '?'}', expected '{branch}' - checking out...")
+    ok = run_cmd(["git", "checkout", branch], cwd=tool_path)
+    if ok:
+        print(f"    [+] Switched to branch '{branch}'")
+    return ok
+
+def install_tool(manifest, key, force=False):
     tool = manifest["tools"][key]
     kind = tool["kind"]
     tool_path = mf.tool_dir(manifest, key)
     tool_path.parent.mkdir(parents=True, exist_ok=True)
     
     print(f"\n[*] {key} ({kind})")
-    
+
+    already_cloned = tool_path.exists()
+
+    # Fast path: tool is already cloned AND its resolved binary/interpreter
+    # exists on disk (mf.is_installed is a cheap Path.exists() check, no
+    # subprocess). Skip clone + build entirely instead of re-running every
+    # install step - the branch is still verified since that's just a
+    # rev-parse, not a rebuild.
+    if not force and already_cloned and mf.is_installed(manifest, key):
+        print(f"    [*] {key} already installed - skipping clone/build (use --force to reinstall).")
+        if not ensure_branch(tool, tool_path):
+            return False, f"branch checkout failed for {key}"
+        return True, ""
+
     # 1. Clone if not exists
-    if not tool_path.exists():
+    if not already_cloned:
         repo = tool["repo"]
         if not run_cmd(["git", "clone", repo, str(tool_path)]):
             return False, f"git clone failed for {key}"
@@ -68,7 +108,9 @@ def install_tool(manifest, key):
             print(f"    [+] Checked out branch '{branch}'")
     else:
         print(f"    [*] {key} already cloned.")
-        
+        if not ensure_branch(tool, tool_path):
+            return False, f"branch checkout failed for {key}"
+
     # 2. Build/Setup - driven entirely by the tool's 'install' steps in
     #    tools.yaml. Each step is a shell command run with cwd=tool_path,
     #    after placeholder substitution. This is what lets a tool like
@@ -109,7 +151,7 @@ def install_all(manifest, only=None, force=False):
     
     for key in keys:
         r = InstallResult(tool=key)
-        success, err = install_tool(manifest, key)
+        success, err = install_tool(manifest, key, force=force)
         if not success:
             r.ok = False
             r.error = err

@@ -6,8 +6,10 @@ Single entrypoint for the hound-orchestrator. Right now this rigs together:
   - `install`   -> installer.py: clone/build/verify every tool in tools.yaml
   - `check`     -> installer.py: verify only, no installing
   - `bh ...`    -> bloodhound_manager.py: the BloodHound instance gate
-                   (setup-manual / setup-automate / status / nuke)
+                   (setup-manual / auto / status / nuke)
   - `run`       -> the collection job runner (stateless execution for testing)
+  - `update ...`-> update.py: check/update third-party tools, or check/update
+                   IDKHound itself (self-check / self-update)
 """
 
 import argparse
@@ -20,6 +22,35 @@ import installer
 import manifest as mf
 import runner
 import update as upd
+
+HOSTS_FILE = Path("/etc/hosts")
+
+
+def _domain_in_hosts(domain: str) -> bool:
+    """
+    Cheap sanity check: is `domain` resolvable via /etc/hosts? Several
+    collectors (bloodhound-py, ConfigManBearPig) do their own DNS lookup for
+    the domain rather than only using --dc-ip directly, and blow up with a
+    LifetimeTimeout if that lookup has nowhere to resolve (see TEMP for a
+    real example). This doesn't touch DNS itself - it's just checking
+    whether a hosts-file fallback exists.
+    """
+    if not HOSTS_FILE.exists():
+        return False
+    domain_lower = domain.lower()
+    try:
+        for line in HOSTS_FILE.read_text().splitlines():
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) < 2:
+                continue
+            if domain_lower in (p.lower() for p in parts[1:]):
+                return True
+    except OSError:
+        return False
+    return False
 
 
 def cmd_install(args):
@@ -50,7 +81,7 @@ def cmd_check(args):
 def cmd_bh(args):
     if args.bh_command == "setup-manual":
         bhm.setup_manual(args.url, args.user, args.password_env, args.neo4j_url)
-    elif args.bh_command == "setup-automate":
+    elif args.bh_command == "auto":
         bhm.setup_automate(args.name, args.bp, args.np, args.wp, args.password)
     elif args.bh_command == "status":
         inst = bhm.load_instance()
@@ -63,6 +94,22 @@ def cmd_bh(args):
 
 
 def cmd_update(args):
+    # self-check / self-update operate on the IDKHound repo itself, not on
+    # tools.yaml, so they don't need a loaded manifest at all.
+    if args.update_command == "self-check":
+        local, remote, err = upd.self_check()
+        if err:
+            print(f"[!] IDKHound self-check failed: {err}")
+            sys.exit(1)
+        behind = local != remote
+        status = "[*] update available" if behind else "[+] up to date"
+        print(f"IDKHound   {local[:10]:<12} {remote[:10]:<12} {status}")
+        sys.exit(1 if behind else 0)
+
+    if args.update_command == "self-update":
+        ok = upd.self_update(force=args.force)
+        sys.exit(0 if ok else 1)
+
     manifest_data = mf.load_manifest()
     only = args.only.split(",") if args.only else None
 
@@ -76,7 +123,7 @@ def cmd_update(args):
         sys.exit(0 if ok else 1)
 
 
-def _preflight_checks(manifest_data) -> bool:
+def _preflight_checks(manifest_data, domain=None) -> bool:
     ok = True
 
     # BloodHound instance check is removed here so the stateless runner 
@@ -90,12 +137,21 @@ def _preflight_checks(manifest_data) -> bool:
     else:
         print("[+] All manifest tools are installed.")
 
+    if domain:
+        if _domain_in_hosts(domain):
+            print(f"[+] '{domain}' resolves via /etc/hosts.")
+        else:
+            print(f"[!] '{domain}' was not found in /etc/hosts - tools that resolve the "
+                  f"domain themselves (rather than only using --dc-ip) may time out.")
+            print(f"    Add a line to /etc/hosts, e.g.: <dc_ip>  {domain}")
+            ok = False
+
     return ok
 
 
 def cmd_run(args):
     manifest_data = mf.load_manifest()
-    if not _preflight_checks(manifest_data):
+    if not _preflight_checks(manifest_data, domain=args.domain):
         print("\n[!] Preflight checks failed - fix the above before running collection jobs.")
         sys.exit(1)
 
@@ -150,7 +206,7 @@ def build_parser():
     p_manual.add_argument("--password-env", required=True)
     p_manual.add_argument("--neo4j-url", default=None)
 
-    p_auto = bh_sub.add_parser("setup-automate")
+    p_auto = bh_sub.add_parser("auto")
     p_auto.add_argument("name")
     p_auto.add_argument("-bp", type=int, default=bhm.DEFAULT_BP)
     p_auto.add_argument("-np", type=int, default=bhm.DEFAULT_NP)
@@ -166,13 +222,35 @@ def build_parser():
     p_bh.set_defaults(func=cmd_bh)
 
     p_run = sub.add_parser("run", help="Run collection jobs (stateless test runner)")
-    p_run.add_argument("--domain", required=True, help="Target domain (e.g. corp.local)")
+    p_run.add_argument("-d", "--domain", required=True, help="Target domain (e.g. corp.local)")
     p_run.add_argument("--dc-ip", required=True, help="Domain controller IP")
-    p_run.add_argument("--username", required=True, help="Username for authentication")
-    p_run.add_argument("--password", required=True, help="Password for authentication")
+    p_run.add_argument("-u", "--username", required=True, help="Username for authentication")
+    p_run.add_argument("-p", "--password", required=True, help="Password for authentication")
     p_run.add_argument("--tools", default=None, help="Comma-separated list of tools to run (default: all)")
     p_run.add_argument("--force", action="store_true", help="Ignored in stateless runner, kept for CLI compatibility")
     p_run.set_defaults(func=cmd_run)
+
+    # NOTE: previously defined (cmd_update) but never actually registered as
+    # a subcommand, so `update` was unreachable from the CLI - fixed here.
+    p_update = sub.add_parser("update", help="Check/update tools, or check/update IDKHound itself")
+    update_sub = p_update.add_subparsers(dest="update_command", required=True)
+
+    p_upd_check = update_sub.add_parser("check", help="Compare local vs remote commits for all tools")
+    p_upd_check.add_argument("--only", default=None, help="Comma-separated tool keys")
+
+    p_upd_update = update_sub.add_parser("update", help="git pull + rebuild tools that are behind")
+    p_upd_update.add_argument("--only", default=None, help="Comma-separated tool keys")
+    p_upd_update.add_argument("--force", action="store_true", help="Rebuild even if already up to date")
+
+    update_sub.add_parser("self-check", help="Check if IDKHound itself has updates available")
+
+    p_upd_self_update = update_sub.add_parser(
+        "self-update",
+        help="Pull the latest IDKHound source (pure Python, no rebuild needed)",
+    )
+    p_upd_self_update.add_argument("--force", action="store_true", help="Pull even if already up to date")
+
+    p_update.set_defaults(func=cmd_update)
 
     return parser
 
