@@ -149,8 +149,8 @@ def _preflight_checks(manifest_data, domain=None, dc_ip=None,
             print(f"")
             print(f"        nxc smb {dc_ip} -u '{username}' -p '{password}' --generate-hosts-file hosts.txt | sudo tee -a /etc/hosts < hosts.txt")
             print(f"")
-            print(f"    (or just add a single line for the DC: ")
-            print(f"        echo '{dc_ip} {domain}' | sudo tee -a /etc/hosts)")
+            print(f"    or just add a single line for the DC: ")
+            print(f"        echo '{dc_ip} {domain}' | sudo tee -a /etc/hosts")
             ok = False
 
     return ok
