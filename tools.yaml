@@ -113,9 +113,9 @@ tools:
 
   ConfigManBearPig:
     kind: python-venv
-    path: python/ConfigManBearPig
+    path: ConfigManBearPig
     venv: venv
-    entry: configmanbearpig.py
+    entry: python/configmanbearpig.py
     repo: https://github.com/SpecterOps/ConfigManBearPig.git
     branch: python
     version_cmd: ["--version"]
@@ -124,7 +124,7 @@ tools:
       - "python3 -m venv {venv}"
       - "{pip} install python/."
     update: ["git checkout python", "git pull", "{pip} install python/."]
-    command_template: "-d {domain} -u {username} -p {password} -dc {dc_ip} -o {output_dir}"
+    command_template: "-d {dc_ip} -u {username} -p {password} -dc {dc_ip} -o {output_dir}" # Might ask Chris about the domain auto resolving if not in /etc/resolv.conf or in /etc/hosts
 
 
 # Note: I think I also need LDAPS flag (optional) for every tool and exclude those that dont have one when the flag is specified
