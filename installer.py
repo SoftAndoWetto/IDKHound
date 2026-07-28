@@ -69,58 +69,36 @@ def install_tool(manifest, key):
     else:
         print(f"    [*] {key} already cloned.")
         
-    # 2. Build/Setup based on kind
-    if kind in ("python-venv", "python-venv-installed"):
-        venv_path = tool_path / tool.get("venv", "venv")
-        if not venv_path.exists():
-            if not run_cmd([sys.executable, "-m", "venv", str(venv_path)]):
-                return False, f"venv creation failed for {key}"
-        pip = venv_path / "bin" / "pip"
-        if not run_cmd([str(pip), "install", "."], cwd=tool_path):
-            return False, f"pip install . failed for {key}"
-            
-    elif kind == "python-venv-editable":
-        venv_path = tool_path / tool.get("venv", "venv")
-        if not venv_path.exists():
-            if not run_cmd([sys.executable, "-m", "venv", str(venv_path)]):
-                return False, f"venv creation failed for {key}"
-        pip = venv_path / "bin" / "pip"
-        if not run_cmd([str(pip), "install", "-e", "."], cwd=tool_path):
-            return False, f"pip install -e . failed for {key}"
-            
-    elif kind == "python-venv-requirements":
-        venv_path = tool_path / tool.get("venv", "venv")
-        if not venv_path.exists():
-            if not run_cmd([sys.executable, "-m", "venv", str(venv_path)]):
-                return False, f"venv creation failed for {key}"
-        pip = venv_path / "bin" / "pip"
-        reqs = tool_path / "requirements.txt"
-        if not run_cmd([str(pip), "install", "-r", str(reqs)], cwd=tool_path):
-            return False, f"pip install -r requirements.txt failed for {key}"
-            
-    elif kind == "cargo-binary":
-        if not run_cmd(["cargo", "build", "--release"], cwd=tool_path):
-            return False, f"cargo build --release failed for {key}"
-            
-    elif kind == "go-binary":
-        update_cmds = tool.get("update", [])
-        go_build_cmd = None
-        for cmd_str in update_cmds:
-            if "go build" in cmd_str:
-                go_build_cmd = cmd_str
-                break
-                
-        if not go_build_cmd:
-            go_build_cmd = f"go build -o {tool['binary']} ."
-            
-        print(f"    $ {go_build_cmd}")
-        res = subprocess.run(go_build_cmd, cwd=tool_path, capture_output=True, text=True, shell=True)
+    # 2. Build/Setup - driven entirely by the tool's 'install' steps in
+    #    tools.yaml. Each step is a shell command run with cwd=tool_path,
+    #    after placeholder substitution. This is what lets a tool like
+    #    ConfigManBearPig install from a subfolder ("python/.") or a tool
+    #    like bloodhound-py build out of a branch-specific layout, without
+    #    any orchestrator code changes - only 'kind' still matters for how
+    #    the tool gets *invoked* later (see manifest.resolve_invocation).
+    install_cmds = tool.get("install")
+    if not install_cmds:
+        return False, f"No 'install' steps defined for {key} in tools.yaml"
+
+    venv_path = tool_path / tool.get("venv", "venv")
+    subs = {
+        "{tool_dir}": str(tool_path),
+        "{venv}": str(venv_path),
+        "{python}": str(venv_path / "bin" / "python"),
+        "{pip}": str(venv_path / "bin" / "pip"),
+        "{binary}": tool.get("binary", ""),
+    }
+
+    for raw_cmd in install_cmds:
+        cmd_str = raw_cmd
+        for placeholder, value in subs.items():
+            cmd_str = cmd_str.replace(placeholder, value)
+        print(f"    $ {cmd_str}")
+        res = subprocess.run(cmd_str, cwd=tool_path, shell=True, capture_output=True, text=True)
         if res.returncode != 0:
             print(res.stderr.strip())
-            return False, f"go build failed for {key}"
-    else:
-        return False, f"Unknown kind: {kind}"
-        
+            return False, f"install step failed for {key}: {cmd_str}"
+
     return True, ""
 
 def install_all(manifest, only=None, force=False):

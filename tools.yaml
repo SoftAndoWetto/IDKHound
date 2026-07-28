@@ -5,17 +5,26 @@
 tools_root: tools
 
 tools:
-#  bloodhound-py:
-#    kind: python-venv
-#    path: BloodHound.py
-#    venv: venv
-#    entry: bloodhound.py
-#    repo: https://github.com/dirkjanm/BloodHound.py.git
-#    branch: bloodhound-ce
-#    version_cmd: ["--version"]
-#    update: ["git checkout bloodhound-ce", "git pull", "pip install ."]
-#    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --zip"
-#    Until this 1) gets an outpit dir flag and 2) isnt on a branch that isnt master, im not implementing it
+  bloodhound-py:
+    kind: python-venv
+    path: BloodHound.py
+    venv: venv
+    entry: bloodhound.py
+    repo: https://github.com/dirkjanm/BloodHound.py.git
+    branch: bloodhound-ce
+    version_cmd: ["--version"]
+    install:
+      - "git checkout bloodhound-ce"
+      - "python3 -m venv {venv}"
+      - "{pip} install ."
+    update: ["git checkout bloodhound-ce", "git pull", "{pip} install ."]
+    # NOTE: bloodhound.py itself has no --output-dir flag, it just writes
+    # zips/json into whatever the cwd is when it's invoked. The 'install'
+    # field above only fixes the *install* (branch + venv), it does not
+    # fix that runtime limitation - runner.py would need a per-tool cwd
+    # (probably {output_dir}) before this can safely run alongside other
+    # jobs without clobbering/mixing output.
+    command_template: "-d {domain} -u {username} -p {password} -ns {dc_ip} --zip"
 
   rusthound-ce:
     kind: cargo-binary
@@ -23,6 +32,8 @@ tools:
     binary: target/release/rusthound-ce
     repo: https://github.com/g0h4n/RustHound-CE
     version_cmd: ["--version"]
+    install:
+      - "cargo build --release"
     update: [git pull, "cargo build --release"]
     command_template: "-d {domain} -u {username} -p {password} -i {dc_ip} -o {output_dir} --zip"
 
@@ -32,6 +43,8 @@ tools:
     binary: mssqlhound
     repo: "https://github.com/SpecterOps/MSSQLHound"
     version_cmd: ["--version"]
+    install:
+      - "go build -o {binary} ./cmd/mssqlhound"
     update: [git pull, "go build -o mssqlhound ./cmd/mssqlhound"]
     command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip} -A --zip-dir {output_dir}"
 
@@ -42,6 +55,9 @@ tools:
     entry: scomhound.py
     repo: "https://github.com/SpecterOps/SCOMHound"
     version_cmd: [""]  # No version tag
+    install:
+      - "python3 -m venv {venv}"
+      - "{pip} install ."
     update: [git pull, "venv/bin/pip install ."]
     command_template: "-d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
 
@@ -75,6 +91,9 @@ tools:
     binary: certihound
     repo: "https://github.com/0x0Trace/Certihound"
     version_cmd: ["--version"]
+    install:
+      - "python3 -m venv {venv}"
+      - "{pip} install -e ."
     update: [git pull, "venv/bin/pip install -e ."]
     command_template: "-d {domain} -u {username} -p {password} --dc {dc_ip}"
 
@@ -89,10 +108,31 @@ tools:
 #	    command_template: "--auth-domain {domain} --auth-user {username} --auth-password {password} --auth-dc-ip {dc_ip} --subnets -o {output_dir}/sharehound.zip"
 ################# lowk no point #################
 
+  ConfigManBearPig:
+    kind: python-venv
+    path: ConfigManBearPig
+    venv: venv
+    entry: configmanbearpig.py
+    repo: https://github.com/SpecterOps/ConfigManBearPig.git
+    branch: python
+    version_cmd: ["--version"]
+    install:
+      - "git checkout python"
+      - "python3 -m venv {venv}"
+      - "{pip} install python/."
+    update: ["git checkout python", "git pull", "{pip} install python/."]
+    command_template: "-d {domain} -u {username} -p {password} -dc {dc_ip} --zip -o {output_dir}"
+
+
+# Note: I think I also need LDAPS flag (optional) for every tool and exclude those that dont have one when the flag is specified
+
   bloodhound-automation:
     kind: python-venv-requirements
     path: bloodhound-automation
     repo: "https://github.com/Tanguy-Boisset/bloodhound-automation"
     venv: venv
     entry: bloodhound-automation.py
+    install:
+      - "python3 -m venv {venv}"
+      - "{pip} install -r requirements.txt"
     version_args: null   # meta tool - no version check, skipped by installer
