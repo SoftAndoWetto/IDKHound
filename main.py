@@ -123,7 +123,8 @@ def cmd_update(args):
         sys.exit(0 if ok else 1)
 
 
-def _preflight_checks(manifest_data, domain=None) -> bool:
+def _preflight_checks(manifest_data, domain=None, dc_ip=None,
+                      username=None, password=None) -> bool:
     ok = True
 
     # BloodHound instance check is removed here so the stateless runner 
@@ -143,7 +144,14 @@ def _preflight_checks(manifest_data, domain=None) -> bool:
         else:
             print(f"[!] '{domain}' was not found in /etc/hosts - tools that resolve the "
                   f"domain themselves (rather than only using --dc-ip) may time out.")
-            print(f"    Add a line to /etc/hosts, e.g.: <dc_ip>  {domain}")
+            print(f"    Easiest fix: let NetExec build a hosts file from SMB enumeration,")
+            print(f"    then append it to /etc/hosts:")
+            print(f"")
+            print(f"        nxc smb {dc_ip} -u '{username}' -p '{password}' --generate-hosts-file")
+            print(f"        sudo tee -a /etc/hosts < hosts.txt")
+            print(f"")
+            print(f"    (or just add a single line for the DC: ")
+            print(f"        echo '{dc_ip} {domain}' | sudo tee -a /etc/hosts)")
             ok = False
 
     return ok
@@ -151,7 +159,13 @@ def _preflight_checks(manifest_data, domain=None) -> bool:
 
 def cmd_run(args):
     manifest_data = mf.load_manifest()
-    if not _preflight_checks(manifest_data, domain=args.domain):
+    if not _preflight_checks(
+        manifest_data,
+        domain=args.domain,
+        dc_ip=args.dc_ip,
+        username=args.username,
+        password=args.password,
+    ):
         print("\n[!] Preflight checks failed - fix the above before running collection jobs.")
         sys.exit(1)
 
