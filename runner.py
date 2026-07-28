@@ -5,15 +5,22 @@ runner.py
 Stateless job runner. Takes inline flags (domain, user, pass, dc, tools)
 from main.py, builds the command strings, prints them to the terminal, 
 and executes them sequentially so you can verify invocations visually.
+
+Each tool's stdout/stderr streams through live_output.RollingPanel - a
+title line plus an auto-updating window of the last few lines - rather
+than dumping potentially thousands of raw lines straight to the terminal.
+The full output is still captured internally, so a failure prints a full
+tail for debugging even though the live view only showed a handful of
+lines at a time.
 """
 
 import shlex
-import subprocess
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
+import live_output as live
 import manifest as mf
 
 ROOT = Path(__file__).resolve().parent
@@ -22,6 +29,8 @@ ROOT = Path(__file__).resolve().parent
 DELAY_SECONDS = 5
 # Constant timeout for all tools
 DEFAULT_TIMEOUT_SECONDS = 600
+# How many of the most recent output lines stay visible per tool
+PANEL_LINES = 5
 
 class ConfigError(Exception):
     pass
@@ -64,62 +73,56 @@ def render_command(manifest_data: dict, tool_key: str, args: RunArgs) -> list:
     prefix = mf.resolve_invocation(manifest_data, tool_key)
     if tool.get("sudo"):
         # e.g. ConfigManBearPig needs to raw-socket UDP broadcast for
-        # SCCM/MECM discovery - unprivileged sockets can't do that.
+        # SCCM/MECM discovery - unprivileged sockets can't do that. Note:
+        # sudo's password prompt (if any) talks to /dev/tty directly on
+        # most systems, so it still works interactively even though stdout
+        # is piped for the rolling panel.
         prefix = ["sudo"] + prefix
     return prefix + rendered_tokens
 
 
 def run(args: RunArgs, manifest_data: dict) -> bool:
-    print(f"\n[*] {len(args.tools)} job(s) queued.\n")
+    print(live.colorize(f"\n{len(args.tools)} job(s) queued.\n", live.C.BOLD))
 
     all_ok = True
     for i, tool_key in enumerate(args.tools):
-        print(f"[*] Running {tool_key} for {args.domain} / {args.username}...")
-        
         try:
             argv = render_command(manifest_data, tool_key, args)
-            print(f"    [>] Command: {' '.join(shlex.quote(a) for a in argv)}\n")
-            print("    " + "-" * 60)
+            live.stage(f"{tool_key} for {args.domain} / {args.username}")
+            live.info_line(live.colorize(' '.join(shlex.quote(a) for a in argv), live.C.DIM))
         except ConfigError as e:
-            print(f"    [!] {tool_key}: {e}")
+            live.err_line(f"{tool_key}: {e}")
             all_ok = False
             continue
 
-        try:
-            # Executing directly without capturing stdout so output streams live to the terminal
-            result = subprocess.run(argv, timeout=DEFAULT_TIMEOUT_SECONDS)
-            exit_code = result.returncode
-        except subprocess.TimeoutExpired:
-            print(f"\n    [!] {tool_key}: failed - exceeded {DEFAULT_TIMEOUT_SECONDS}s timeout")
-            all_ok = False
-            if i < len(args.tools) - 1 and DELAY_SECONDS > 0:
-                print(f"\n[*] Waiting {DELAY_SECONDS}s before next tool...\n")
-                time.sleep(DELAY_SECONDS)
-            continue
-        except Exception as e:
-            print(f"\n    [!] {tool_key}: failed to launch - {e}")
-            all_ok = False
-            if i < len(args.tools) - 1 and DELAY_SECONDS > 0:
-                print(f"\n[*] Waiting {DELAY_SECONDS}s before next tool...\n")
-                time.sleep(DELAY_SECONDS)
-            continue
+        rc, timed_out, output = live.run_streaming(
+            argv,
+            title=tool_key,
+            num_lines=PANEL_LINES,
+            timeout=DEFAULT_TIMEOUT_SECONDS,
+        )
 
-        print("    " + "-" * 60)
-        if exit_code == 0:
-            print(f"    [+] {tool_key}: done (exit code 0)")
+        if timed_out:
+            live.err_line(f"{tool_key}: failed - exceeded {DEFAULT_TIMEOUT_SECONDS}s timeout")
+            live.dump_tail(output)
+            all_ok = False
+        elif rc != 0:
+            live.err_line(f"{tool_key}: failed (exit code {rc})")
+            live.dump_tail(output)
+            all_ok = False
         else:
-            print(f"    [!] {tool_key}: failed (exit code {exit_code})")
-            all_ok = False
+            live.ok_line(f"{tool_key}: done")
 
         if i < len(args.tools) - 1 and DELAY_SECONDS > 0:
-            print(f"\n[*] Waiting {DELAY_SECONDS}s before next tool...\n")
+            live.info_line(f"Waiting {DELAY_SECONDS}s before next tool...\n")
             time.sleep(DELAY_SECONDS)
 
-    print("\n" + "=" * 74)
-    print("RUN SUMMARY")
-    print("=" * 74)
+    width = 74
+    print("\n" + live.colorize("=" * width, live.C.DIM))
+    print(live.colorize("RUN SUMMARY", live.C.BOLD))
+    print(live.colorize("=" * width, live.C.DIM))
     for tool_key in args.tools:
-        print(f"  {tool_key:<18} executed")
-    print("=" * 74)
+        print(f"  {tool_key:<18} {live.colorize('executed', live.C.DIM)}")
+    print(live.colorize("=" * width, live.C.DIM))
     
     return all_ok

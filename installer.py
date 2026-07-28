@@ -6,6 +6,7 @@ from pathlib import Path
 from dataclasses import dataclass
 
 import manifest as mf
+import live_output as live
 
 @dataclass
 class InstallResult:
@@ -15,7 +16,7 @@ class InstallResult:
     ok: bool = True
 
 def check_prereqs():
-    print("[*] Checking prerequisites...")
+    live.info_line("Checking prerequisites...")
     missing = []
     
     if not shutil.which("python3"):
@@ -31,20 +32,26 @@ def check_prereqs():
         missing.append("libkrb5-dev (sudo apt install -y libkrb5-dev libgssapi-krb5-2 pkg-config)")
         
     if missing:
-        print("\n[!] Missing prerequisites:")
+        live.err_line("Missing prerequisites:")
         for m in missing:
-            print(f"    - {m}")
+            print(f"      - {m}")
         print("\nPlease install the missing prerequisites before continuing.")
         sys.exit(1)
         
-    print("[+] All prerequisites are installed.\n")
+    live.ok_line("All prerequisites are installed.\n")
 
-def run_cmd(cmd, cwd=None):
-    print(f"    $ {' '.join(cmd)}")
-    res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
-    if res.returncode != 0:
-        print(res.stderr.strip())
-    return res.returncode == 0
+def run_cmd(cmd, cwd=None, title=None):
+    """
+    Runs a (usually short) command like `git clone`/`git checkout` through
+    the rolling-panel streamer instead of capture_output=True, so a slow
+    clone doesn't sit there looking dead either. On failure, dumps the full
+    captured output (not just whatever the panel happened to be showing)
+    so nothing is lost for debugging.
+    """
+    rc, timed_out, output = live.run_streaming(cmd, cwd=cwd, title=title or " ".join(cmd))
+    if rc != 0:
+        live.dump_tail(output)
+    return rc == 0
 
 def _current_branch(tool_path):
     """Cheap `git rev-parse --abbrev-ref HEAD` - no fetch, no mutation."""
@@ -52,7 +59,7 @@ def _current_branch(tool_path):
                           cwd=tool_path, capture_output=True, text=True)
     return res.stdout.strip() if res.returncode == 0 else None
 
-def ensure_branch(tool, tool_path):
+def ensure_branch(tool, tool_path, key="tool"):
     """
     If tools.yaml pins a branch for this tool (e.g. bloodhound-py's
     'bloodhound-ce', ConfigManBearPig's 'python'), make sure the clone is
@@ -65,12 +72,12 @@ def ensure_branch(tool, tool_path):
         return True
     current = _current_branch(tool_path)
     if current == branch:
-        print(f"    [+] On correct branch '{branch}'")
+        live.ok_line(f"On correct branch '{branch}'")
         return True
-    print(f"    [!] On branch '{current or '?'}', expected '{branch}' - checking out...")
-    ok = run_cmd(["git", "checkout", branch], cwd=tool_path)
+    live.warn_line(f"On branch '{current or '?'}', expected '{branch}' - checking out...")
+    ok = run_cmd(["git", "checkout", branch], cwd=tool_path, title=f"{key}: git checkout {branch}")
     if ok:
-        print(f"    [+] Switched to branch '{branch}'")
+        live.ok_line(f"Switched to branch '{branch}'")
     return ok
 
 def install_tool(manifest, key, force=False):
@@ -79,7 +86,7 @@ def install_tool(manifest, key, force=False):
     tool_path = mf.tool_dir(manifest, key)
     tool_path.parent.mkdir(parents=True, exist_ok=True)
     
-    print(f"\n[*] {key} ({kind})")
+    live.stage(f"{key} ({kind})")
 
     already_cloned = tool_path.exists()
 
@@ -89,26 +96,26 @@ def install_tool(manifest, key, force=False):
     # install step - the branch is still verified since that's just a
     # rev-parse, not a rebuild.
     if not force and already_cloned and mf.is_installed(manifest, key):
-        print(f"    [*] {key} already installed - skipping clone/build (use --force to reinstall).")
-        if not ensure_branch(tool, tool_path):
+        live.info_line("already installed - skipping clone/build (use --force to reinstall).")
+        if not ensure_branch(tool, tool_path, key=key):
             return False, f"branch checkout failed for {key}"
         return True, ""
 
     # 1. Clone if not exists
     if not already_cloned:
         repo = tool["repo"]
-        if not run_cmd(["git", "clone", repo, str(tool_path)]):
+        if not run_cmd(["git", "clone", repo, str(tool_path)], title=f"{key}: git clone {repo}"):
             return False, f"git clone failed for {key}"
-        print(f"    [+] Cloned {key} -> {tool_path}")
+        live.ok_line(f"Cloned {key} -> {tool_path}")
 
         branch = tool.get("branch")
         if branch:
-            if not run_cmd(["git", "checkout", branch], cwd=tool_path):
+            if not run_cmd(["git", "checkout", branch], cwd=tool_path, title=f"{key}: git checkout {branch}"):
                 return False, f"git checkout {branch} failed for {key}"
-            print(f"    [+] Checked out branch '{branch}'")
+            live.ok_line(f"Checked out branch '{branch}'")
     else:
-        print(f"    [*] {key} already cloned.")
-        if not ensure_branch(tool, tool_path):
+        live.info_line("already cloned.")
+        if not ensure_branch(tool, tool_path, key=key):
             return False, f"branch checkout failed for {key}"
 
     # 2. Build/Setup - driven entirely by the tool's 'install' steps in
@@ -135,10 +142,14 @@ def install_tool(manifest, key, force=False):
         cmd_str = raw_cmd
         for placeholder, value in subs.items():
             cmd_str = cmd_str.replace(placeholder, value)
-        print(f"    $ {cmd_str}")
-        res = subprocess.run(cmd_str, cwd=tool_path, shell=True, capture_output=True, text=True)
-        if res.returncode != 0:
-            print(res.stderr.strip())
+        # shell=True + streamed through the rolling panel: a slow step like
+        # rusthound-ce's `cargo build --release` now shows live compiler
+        # output instead of sitting there silently looking hung.
+        rc, timed_out, output = live.run_streaming(
+            cmd_str, cwd=tool_path, shell=True, title=f"{key}: {cmd_str}"
+        )
+        if rc != 0:
+            live.dump_tail(output)
             return False, f"install step failed for {key}: {cmd_str}"
 
     return True, ""
@@ -188,15 +199,17 @@ def verify_version(manifest, key, result):
         result.ok = False
 
 def print_summary(results):
-    print("\n" + "="*60)
-    print("TOOL CHECK SUMMARY")
-    print("="*60)
+    width = 60
+    print("\n" + live.colorize("=" * width, live.C.DIM))
+    print(live.colorize("TOOL CHECK SUMMARY", live.C.BOLD))
+    print(live.colorize("=" * width, live.C.DIM))
     all_ok = True
     for r in results:
         if r.ok:
-            status = "[+] OK"
+            status = live.colorize("✓ OK", live.C.GREEN)
         else:
-            status = f"[!] FAILED ({r.error})"
+            status = f"{live.colorize('✗ FAILED', live.C.RED)} {live.colorize(f'({r.error})', live.C.DIM)}"
             all_ok = False
         print(f"  {r.tool:<25} {status}")
+    print(live.colorize("=" * width, live.C.DIM))
     return all_ok
