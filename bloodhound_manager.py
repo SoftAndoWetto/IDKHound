@@ -21,7 +21,9 @@ State file: state/bloodhound_instance.json
 import argparse
 import json
 import os
+import shlex
 import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -60,6 +62,216 @@ DEFAULT_WP = 8001    # web port
 DEFAULT_AUTOMATE_PASSWORD = "Password123!"
 
 PROJECTS_DIR = BH_AUTOMATE_DIR / "projects"
+
+
+# --------------------------------------------------------------------------- #
+# Docker environment helpers
+# --------------------------------------------------------------------------- #
+
+# When True, all docker commands are wrapped in `sg docker -c '...'` because
+# the current shell doesn't have the docker group active yet (the user was
+# just added via usermod and hasn't logged out/in).  `sg` is the
+# non-interactive cousin of `newgrp` - it runs a single command with the
+# supplementary group active and returns, instead of spawning an interactive
+# subshell that the script can't control.
+_DOCKER_SG_WRAP = False
+
+
+def _shlex_join(cmd: list) -> str:
+    """shlex.join shim for Python < 3.8."""
+    return " ".join(shlex.quote(str(c)) for c in cmd)
+
+
+def _docker_cmd(*args) -> list:
+    """Build a docker command list, transparently wrapping in ``sg docker -c``
+    when the current shell lacks the docker group."""
+    cmd = ["docker", *args]
+    if _DOCKER_SG_WRAP:
+        return ["sg", "docker", "-c", _shlex_join(cmd)]
+    return cmd
+
+
+def _run_sudo(cmd: list, **kwargs) -> subprocess.CompletedProcess:
+    """Run *cmd* with sudo unless we're already root."""
+    if os.geteuid() != 0:
+        cmd = ["sudo"] + cmd
+    return subprocess.run(cmd, **kwargs)
+
+
+def _docker_accessible() -> bool:
+    """True if ``docker ps`` works in the current shell without sudo."""
+    return subprocess.run(
+        ["docker", "ps"], capture_output=True, text=True
+    ).returncode == 0
+
+
+def _docker_accessible_via_sg() -> bool:
+    """True if ``docker ps`` works when wrapped in ``sg docker -c``."""
+    try:
+        return subprocess.run(
+            ["sg", "docker", "-c", "docker ps"],
+            capture_output=True, text=True,
+        ).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def _kill_process_group(proc: subprocess.Popen):
+    """Terminate a Popen process **and** its entire process group.
+
+    Needed because when ``_DOCKER_SG_WRAP`` is True the Popen is an ``sg``
+    process whose child (the real ``docker logs -f``) won't receive a
+    plain ``proc.terminate()``.
+    """
+    try:
+        pgid = os.getpgid(proc.pid)
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        try:
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            pass
+        proc.wait()
+
+
+def ensure_docker_environment():
+    """
+    Ensures Docker and docker-compose are installed, the docker service is
+    running, and the current user can access docker without sudo.
+
+    Steps (only the ones actually needed are executed):
+
+      1. ``apt-get install docker.io docker-compose``  — if missing
+      2. ``systemctl start docker`` / ``enable docker``  — if not running
+      3. ``usermod -aG docker $USER``                     — if not in group
+      4. Verify access; if the group was just added and isn't active in the
+         current shell, set ``_DOCKER_SG_WRAP`` so all subsequent docker
+         commands (including the bloodhound-automation invocation) are
+         transparently wrapped in ``sg docker -c '...'``.
+
+    Exits the process with an error if docker cannot be made accessible.
+    """
+    global _DOCKER_SG_WRAP
+
+    # ---- Fast path: docker already works ------------------------------- #
+    if _docker_accessible():
+        return
+
+    # ---- Only automate installation on apt-based systems --------------- #
+    if shutil.which("apt-get") is None:
+        print("[!] Docker is not accessible and this system doesn't have apt-get.")
+        print("    Please install Docker manually:")
+        print("      https://docs.docker.com/engine/install/")
+        print("    Then add yourself to the docker group:")
+        print("      sudo usermod -aG docker $USER")
+        print("    And log out and back in (or run 'newgrp docker').")
+        sys.exit(1)
+
+    # ---- 1. Install docker.io / docker-compose if missing -------------- #
+    pkgs = []
+    if shutil.which("docker") is None:
+        pkgs.append("docker.io")
+    if shutil.which("docker-compose") is None:
+        # docker compose v2 plugin might already be bundled in docker.io,
+        # but we can only check if docker itself is present.
+        if shutil.which("docker") is not None:
+            v2 = subprocess.run(
+                ["docker", "compose", "version"],
+                capture_output=True, text=True,
+            )
+            if v2.returncode != 0:
+                pkgs.append("docker-compose")
+        else:
+            pkgs.append("docker-compose")
+
+    if pkgs:
+        print(f"[*] Installing: {', '.join(pkgs)} ...")
+        r = _run_sudo(["apt-get", "update"], capture_output=True, text=True)
+        if r.returncode != 0:
+            print(f"[!] apt-get update failed:\n{r.stderr}")
+            sys.exit(1)
+        r = _run_sudo(
+            ["apt-get", "install", "-y", *pkgs],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"[!] apt-get install failed:\n{r.stderr}")
+            sys.exit(1)
+        print(f"[+] Installed: {', '.join(pkgs)}")
+
+    # ---- 2. Start & enable the docker service -------------------------- #
+    print("[*] Ensuring docker service is running ...")
+    _run_sudo(["systemctl", "start", "docker"], capture_output=True, text=True)
+    _run_sudo(["systemctl", "enable", "docker"], capture_output=True, text=True)
+    status = _run_sudo(
+        ["systemctl", "is-active", "docker"],
+        capture_output=True, text=True,
+    )
+    if status.returncode != 0:
+        print(f"[!] Docker service failed to start "
+              f"(is-active: {status.stdout.strip()}).")
+        print("    Check: sudo journalctl -u docker")
+        sys.exit(1)
+    print("[+] Docker service is running.")
+
+    # ---- 3. Check access again ----------------------------------------- #
+    if _docker_accessible():
+        print("[+] Docker is accessible.")
+        return
+
+    # Running as root should already have access after the service starts.
+    if os.geteuid() == 0:
+        print("[!] Running as root but docker is still not accessible.")
+        print("    Check the docker daemon logs: journalctl -u docker")
+        sys.exit(1)
+
+    # ---- 4. Add current user to the docker group ----------------------- #
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    if not user:
+        print("[!] Could not determine current username.")
+        sys.exit(1)
+
+    groups_out = subprocess.run(["id", "-nG"], capture_output=True, text=True)
+    user_groups = groups_out.stdout.split() if groups_out.returncode == 0 else []
+
+    if "docker" not in user_groups:
+        print(f"[*] Adding user '{user}' to the docker group ...")
+        r = _run_sudo(
+            ["usermod", "-aG", "docker", user],
+            capture_output=True, text=True,
+        )
+        if r.returncode != 0:
+            print(f"[!] usermod failed:\n{r.stderr}")
+            sys.exit(1)
+        print(f"[+] User '{user}' added to the docker group.")
+    else:
+        print("[*] User is already in the docker group, but the group "
+              "isn't active in this shell.")
+
+    # ---- 5. Try sg docker -c as a live workaround ---------------------- #
+    # `sg` checks group membership from /etc/group, not from the current
+    # process's supplementary groups, so it works immediately after usermod
+    # without requiring a re-login.  `newgrp` would also work but opens an
+    # interactive subshell we can't control from a script.
+    if _docker_accessible_via_sg():
+        print("[+] Docker is accessible via 'sg docker -c'.")
+        print("[!] Your current shell doesn't have the docker group active.")
+        print("    Commands will be wrapped in 'sg docker -c' as a workaround.")
+        print("    For a permanent fix, log out and back in "
+              "(or run 'newgrp docker').\n")
+        _DOCKER_SG_WRAP = True
+        return
+
+    # ---- 6. Last resort ------------------------------------------------ #
+    print("[!] Docker is installed and running, but the current user still")
+    print("    cannot access it.  Please log out and back in (or run")
+    print("    'newgrp docker'), then re-run this command.")
+    sys.exit(1)
 
 
 # --------------------------------------------------------------------------- #
@@ -171,7 +383,7 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
     Returns (returncode, full_output_str).
     """
     baseline_check = subprocess.run(
-        ["docker", "ps", "-a", "-q"], capture_output=True, text=True
+        _docker_cmd("ps", "-a", "-q"), capture_output=True, text=True
     )
     if baseline_check.returncode != 0:
         baseline_ids = set()
@@ -209,15 +421,17 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
 
     def _stream_container_logs(cid: str):
         name_res = subprocess.run(
-            ["docker", "inspect", "--format", "{{.Name}}", cid],
+            _docker_cmd("inspect", "--format", "{{.Name}}", cid),
             capture_output=True, text=True,
         )
         cname = name_res.stdout.strip().lstrip("/") or cid[:12]
         _append(f"[+] attached to container '{cname}'")
         try:
             log_proc = subprocess.Popen(
-                ["docker", "logs", "-f", cid],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                _docker_cmd("logs", "-f", cid),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, bufsize=1,
+                start_new_session=True,  # so _kill_process_group can reach children
             )
         except FileNotFoundError as e:
             _append(f"[!] couldn't run `docker logs` for {cname}: {e}")
@@ -230,18 +444,14 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
         except Exception as e:
             _append(f"[!] log stream for {cname} errored: {e}")
         finally:
-            log_proc.terminate()
-            try:
-                log_proc.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                log_proc.kill()
+            _kill_process_group(log_proc)
 
     def _watch_containers():
         if docker_error:
             return
         while not stop_event.is_set():
             result = subprocess.run(
-                ["docker", "ps", "-a", "-q"], capture_output=True, text=True
+                _docker_cmd("ps", "-a", "-q"), capture_output=True, text=True
             )
             if result.returncode == 0:
                 current_ids = set(
@@ -356,16 +566,9 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
     with no need to parse it back out of anything.
     """
 
+    # ---- Ensure Docker is installed, running, and accessible ----------- #
+    ensure_docker_environment()
 
-
-    # Note need to add checks for 
-    #sudo apt install docker.io
-    #sudo apt install docker-compose
-    #sudo usermod -aG docker $USER
-    #sudo systemctl start docker
-    #sudo systemctl enable docker
-    #sudo systemctl status docker
-    #newgrp docker (Or some other way to reload idk)
     if not mf.is_installed(_manifest, BH_AUTOMATE_KEY):
         print(f"[!] bloodhound-automation isn't installed. Run:\n"
               f"    python3 installer.py install --only {BH_AUTOMATE_KEY}")
@@ -379,6 +582,13 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
         "--password", password_to_use,
         name,
     ]
+
+    # If the docker group isn't active in the current shell, wrap the entire
+    # bloodhound-automation invocation in `sg docker -c '...'` so that all
+    # docker commands it spawns internally inherit the docker group.
+    if _DOCKER_SG_WRAP:
+        cmd = ["sg", "docker", "-c", _shlex_join(cmd)]
+
     print(f"[*] Running: {' '.join(cmd)}")
     returncode, combined_output = _run_with_live_view(
         cmd, cwd=BH_AUTOMATE_DIR,
@@ -488,12 +698,12 @@ def nuke(name: str, assume_yes: bool = False):
 
 
 def _docker_list(*args) -> list:
-    result = subprocess.run(["docker", *args], capture_output=True, text=True)
+    result = subprocess.run(_docker_cmd(*args), capture_output=True, text=True)
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def _docker_run(*args):
-    subprocess.run(["docker", *args], capture_output=True, text=True)
+    subprocess.run(_docker_cmd(*args), capture_output=True, text=True)
 
 
 # --------------------------------------------------------------------------- #
