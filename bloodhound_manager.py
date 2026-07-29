@@ -21,13 +21,26 @@ State file: state/bloodhound_instance.json
 import argparse
 import json
 import os
+import shutil
 import stat
 import subprocess
 import sys
+import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
 import manifest as mf
+
+try:
+    from rich.live import Live
+    from rich.panel import Panel
+    from rich.text import Text
+    from rich.spinner import Spinner
+    from rich.console import Group, Console
+    _HAS_RICH = True
+except ImportError:
+    _HAS_RICH = False
 
 ROOT = Path(__file__).resolve().parent
 STATE_DIR = ROOT / "state"
@@ -136,6 +149,84 @@ def setup_manual(url: str, username: str, password_env: str, neo4j_url: str = No
 SUCCESS_BANNER_MARKER = "You are using BHCE"
 
 
+def _run_with_live_view(cmd, cwd, title: str, tail_lines: int = 14):
+    """
+    Runs `cmd` in `cwd`, streaming stdout+stderr live to the terminal, and
+    returns (returncode, full_output_str) once the process has finished -
+    same contract subprocess.run(..., capture_output=True) gave callers.
+
+    The live view only exists while the process is alive: the loop reads
+    from proc.stdout until EOF (i.e. until the child exits), then tears
+    down the live region and prints one static summary line. It never
+    continues to follow logs after that point.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1,
+    )
+
+    full_lines = []
+    tail = deque(maxlen=tail_lines)
+    start = time.monotonic()
+
+    if _HAS_RICH:
+        _stream_with_rich(proc, title, full_lines, tail, start)
+    else:
+        _stream_plain(proc, title, full_lines, tail, start)
+
+    returncode = proc.wait()
+    return returncode, "\n".join(full_lines)
+
+
+def _stream_with_rich(proc, title, full_lines, tail, start):
+    def render():
+        elapsed = time.monotonic() - start
+        header = Spinner("dots", text=f" {title}  ({elapsed:0.1f}s elapsed)")
+        body = Text("\n".join(tail) or "(waiting for output...)", style="dim")
+        return Panel(Group(header, "", body), title="bloodhound-automation", border_style="cyan")
+
+    with Live(render(), refresh_per_second=8, transient=False) as live:
+        for line in proc.stdout:
+            line = line.rstrip("\n")
+            full_lines.append(line)
+            tail.append(line)
+            live.update(render())
+        live.update(render())
+
+    rc = proc.poll()
+    status = "[green]done[/green]" if rc == 0 else f"[red]exited {rc}[/red]"
+    Console().print(f"[bold]{title}[/bold] - {status}")
+
+
+def _stream_plain(proc, title, full_lines, tail, start):
+    spinner_frames = "|/-\\"
+    frame_i = 0
+    width = shutil.get_terminal_size(fallback=(80, 20)).columns
+
+    print(f"[*] {title}")
+    for line in proc.stdout:
+        line = line.rstrip("\n")
+        full_lines.append(line)
+        tail.append(line)
+
+        elapsed = time.monotonic() - start
+        spin = spinner_frames[frame_i % len(spinner_frames)]
+        frame_i += 1
+
+        print(f"    {line}")
+        status = f"[{spin}] running ({elapsed:0.1f}s)"
+        sys.stdout.write("\r" + status[:width].ljust(width))
+        sys.stdout.flush()
+
+    sys.stdout.write("\r" + " " * width + "\r")
+    rc = proc.poll()
+    print(f"[*] {title} - {'done' if rc == 0 else f'exited {rc}'}")
+
+
 def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
                     wp: int = DEFAULT_WP, password: str = None):
     """
@@ -182,15 +273,14 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
         name,
     ]
     print(f"[*] Running: {' '.join(cmd)}")
+    returncode, combined_output = _run_with_live_view(
+        cmd, cwd=BH_AUTOMATE_DIR, title=f"Spinning up BloodHound instance '{name}'"
+    )
 
-    result = subprocess.run(cmd, cwd=BH_AUTOMATE_DIR, capture_output=True, text=True)
-    combined_output = result.stdout + "\n" + result.stderr
-    print(combined_output)
-
-    if result.returncode != 0:
-        print(f"[!] bloodhound-automation exited with code {result.returncode}. "
+    if returncode != 0:
+        print(f"[!] bloodhound-automation exited with code {returncode}. "
               f"Instance was NOT marked ready.")
-        sys.exit(result.returncode)
+        sys.exit(returncode)
 
     if SUCCESS_BANNER_MARKER not in combined_output:
         print(f"[!] Exit code was 0 but the '{SUCCESS_BANNER_MARKER}' banner "
