@@ -155,23 +155,33 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
     """
     Runs `cmd` in `cwd` and shows a live panel while it's running.
 
-    bloodhound-automation itself doesn't print incremental progress - it
-    buffers everything and dumps one banner at the end - so the useful
-    live signal actually comes from `docker logs -f` on the containers it
-    spins up. If `project_name` is given, a background watcher polls
-    `docker ps` for containers matching that name (same filter pattern as
-    nuke()) and streams each one's `docker logs -f` output into the same
-    panel as it's found.
+    bloodhound-automation itself doesn't print incremental progress, so the
+    live signal comes from `docker logs -f` on whatever containers it spins
+    up. Discovery is done by diffing `docker ps -a -q` before/after
+    starting `cmd`, rather than filtering by name - the tool's actual
+    container-naming scheme isn't guaranteed to contain `project_name`, and
+    a name-filter that silently matches nothing looks identical to
+    "nothing is happening yet".
 
     Lifetime guarantee: every `docker logs -f` follower is tied to a
-    stop_event that gets set the instant the main `cmd` process exits, and
-    each follower is terminate()'d right after. Nothing here keeps
-    following logs after the setup process is done - `docker logs -f`
-    would run forever on its own, so this is the part that cuts it off.
+    stop_event that's set the instant `cmd`'s process exits, and each
+    follower is terminate()'d right after - `docker logs -f` never keeps
+    running on its own past that point.
 
-    Returns (returncode, full_output_str), matching the old
-    subprocess.run(..., capture_output=True) contract.
+    Returns (returncode, full_output_str).
     """
+    baseline_check = subprocess.run(
+        ["docker", "ps", "-a", "-q"], capture_output=True, text=True
+    )
+    if baseline_check.returncode != 0:
+        baseline_ids = set()
+        docker_error = baseline_check.stderr.strip() or "unknown error running `docker ps`"
+    else:
+        baseline_ids = set(
+            line.strip() for line in baseline_check.stdout.splitlines() if line.strip()
+        )
+        docker_error = None
+
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
@@ -194,24 +204,31 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
             full_lines.append(entry)
             tail.append(entry)
 
+    if docker_error:
+        _append(f"[!] `docker ps` failed, container logs won't be available: {docker_error}")
+
     def _stream_container_logs(cid: str):
         name_res = subprocess.run(
             ["docker", "inspect", "--format", "{{.Name}}", cid],
             capture_output=True, text=True,
         )
         cname = name_res.stdout.strip().lstrip("/") or cid[:12]
+        _append(f"[+] attached to container '{cname}'")
         try:
             log_proc = subprocess.Popen(
-                ["docker", "logs", "-f", "--tail", "0", cid],
+                ["docker", "logs", "-f", cid],
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             )
-        except FileNotFoundError:
+        except FileNotFoundError as e:
+            _append(f"[!] couldn't run `docker logs` for {cname}: {e}")
             return
         try:
             for line in log_proc.stdout:
                 if stop_event.is_set():
                     break
                 _append(f"[{cname}] {line.rstrip(chr(10))}")
+        except Exception as e:
+            _append(f"[!] log stream for {cname} errored: {e}")
         finally:
             log_proc.terminate()
             try:
@@ -220,12 +237,17 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
                 log_proc.kill()
 
     def _watch_containers():
-        if not project_name:
+        if docker_error:
             return
-        names_to_check = {project_name, project_name.lower()}
         while not stop_event.is_set():
-            for n in names_to_check:
-                for cid in _docker_list("ps", "-q", "--filter", f"name={n}"):
+            result = subprocess.run(
+                ["docker", "ps", "-a", "-q"], capture_output=True, text=True
+            )
+            if result.returncode == 0:
+                current_ids = set(
+                    line.strip() for line in result.stdout.splitlines() if line.strip()
+                )
+                for cid in current_ids - baseline_ids:
                     if cid not in seen_containers:
                         seen_containers.add(cid)
                         t = threading.Thread(
@@ -243,14 +265,12 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
     else:
         _stream_plain(proc, title, full_lines, tail, start, lock)
 
-    # Main process is done - cut off every docker logs -f follower now.
     stop_event.set()
     for t in log_threads:
         t.join(timeout=3)
 
     returncode = proc.wait()
     return returncode, "\n".join(full_lines)
-
 
 def _stream_with_rich(proc, title, full_lines, tail, start, lock):
     def render():
