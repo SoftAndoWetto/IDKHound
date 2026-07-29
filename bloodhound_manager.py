@@ -25,6 +25,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import threading
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -149,16 +150,27 @@ def setup_manual(url: str, username: str, password_env: str, neo4j_url: str = No
 SUCCESS_BANNER_MARKER = "You are using BHCE"
 
 
-def _run_with_live_view(cmd, cwd, title: str, tail_lines: int = 14):
+def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
+                         tail_lines: int = 14):
     """
-    Runs `cmd` in `cwd`, streaming stdout+stderr live to the terminal, and
-    returns (returncode, full_output_str) once the process has finished -
-    same contract subprocess.run(..., capture_output=True) gave callers.
+    Runs `cmd` in `cwd` and shows a live panel while it's running.
 
-    The live view only exists while the process is alive: the loop reads
-    from proc.stdout until EOF (i.e. until the child exits), then tears
-    down the live region and prints one static summary line. It never
-    continues to follow logs after that point.
+    bloodhound-automation itself doesn't print incremental progress - it
+    buffers everything and dumps one banner at the end - so the useful
+    live signal actually comes from `docker logs -f` on the containers it
+    spins up. If `project_name` is given, a background watcher polls
+    `docker ps` for containers matching that name (same filter pattern as
+    nuke()) and streams each one's `docker logs -f` output into the same
+    panel as it's found.
+
+    Lifetime guarantee: every `docker logs -f` follower is tied to a
+    stop_event that gets set the instant the main `cmd` process exits, and
+    each follower is terminate()'d right after. Nothing here keeps
+    following logs after the setup process is done - `docker logs -f`
+    would run forever on its own, so this is the part that cuts it off.
+
+    Returns (returncode, full_output_str), matching the old
+    subprocess.run(..., capture_output=True) contract.
     """
     proc = subprocess.Popen(
         cmd,
@@ -172,29 +184,95 @@ def _run_with_live_view(cmd, cwd, title: str, tail_lines: int = 14):
     full_lines = []
     tail = deque(maxlen=tail_lines)
     start = time.monotonic()
+    lock = threading.Lock()
+    stop_event = threading.Event()
+    seen_containers = set()
+    log_threads = []
+
+    def _append(entry: str):
+        with lock:
+            full_lines.append(entry)
+            tail.append(entry)
+
+    def _stream_container_logs(cid: str):
+        name_res = subprocess.run(
+            ["docker", "inspect", "--format", "{{.Name}}", cid],
+            capture_output=True, text=True,
+        )
+        cname = name_res.stdout.strip().lstrip("/") or cid[:12]
+        try:
+            log_proc = subprocess.Popen(
+                ["docker", "logs", "-f", "--tail", "0", cid],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+            )
+        except FileNotFoundError:
+            return
+        try:
+            for line in log_proc.stdout:
+                if stop_event.is_set():
+                    break
+                _append(f"[{cname}] {line.rstrip(chr(10))}")
+        finally:
+            log_proc.terminate()
+            try:
+                log_proc.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                log_proc.kill()
+
+    def _watch_containers():
+        if not project_name:
+            return
+        names_to_check = {project_name, project_name.lower()}
+        while not stop_event.is_set():
+            for n in names_to_check:
+                for cid in _docker_list("ps", "-q", "--filter", f"name={n}"):
+                    if cid not in seen_containers:
+                        seen_containers.add(cid)
+                        t = threading.Thread(
+                            target=_stream_container_logs, args=(cid,), daemon=True
+                        )
+                        t.start()
+                        log_threads.append(t)
+            stop_event.wait(1.0)
+
+    watcher = threading.Thread(target=_watch_containers, daemon=True)
+    watcher.start()
 
     if _HAS_RICH:
-        _stream_with_rich(proc, title, full_lines, tail, start)
+        _stream_with_rich(proc, title, full_lines, tail, start, lock)
     else:
-        _stream_plain(proc, title, full_lines, tail, start)
+        _stream_plain(proc, title, full_lines, tail, start, lock)
+
+    # Main process is done - cut off every docker logs -f follower now.
+    stop_event.set()
+    for t in log_threads:
+        t.join(timeout=3)
 
     returncode = proc.wait()
     return returncode, "\n".join(full_lines)
 
 
-def _stream_with_rich(proc, title, full_lines, tail, start):
+def _stream_with_rich(proc, title, full_lines, tail, start, lock):
     def render():
         elapsed = time.monotonic() - start
         header = Spinner("dots", text=f" {title}  ({elapsed:0.1f}s elapsed)")
-        body = Text("\n".join(tail) or "(waiting for output...)", style="dim")
+        with lock:
+            body_text = "\n".join(tail) or "(waiting for container output...)"
+        body = Text(body_text, style="dim")
         return Panel(Group(header, "", body), title="bloodhound-automation", border_style="cyan")
 
     with Live(render(), refresh_per_second=8, transient=False) as live:
-        for line in proc.stdout:
-            line = line.rstrip("\n")
-            full_lines.append(line)
-            tail.append(line)
+        # Poll instead of a blocking `for line in proc.stdout` so container
+        # log lines (appended from other threads) still get rendered even
+        # while the main process itself is silent/buffering.
+        while proc.poll() is None:
             live.update(render())
+            time.sleep(0.125)
+        # Drain anything left in the main process's own buffered stdout.
+        for line in proc.stdout:
+            with lock:
+                full_lines.append(line.rstrip("\n"))
+                tail.append(line.rstrip("\n"))
         live.update(render())
 
     rc = proc.poll()
@@ -202,25 +280,34 @@ def _stream_with_rich(proc, title, full_lines, tail, start):
     Console().print(f"[bold]{title}[/bold] - {status}")
 
 
-def _stream_plain(proc, title, full_lines, tail, start):
+def _stream_plain(proc, title, full_lines, tail, start, lock):
     spinner_frames = "|/-\\"
     frame_i = 0
     width = shutil.get_terminal_size(fallback=(80, 20)).columns
+    printed = 0
 
     print(f"[*] {title}")
-    for line in proc.stdout:
-        line = line.rstrip("\n")
-        full_lines.append(line)
-        tail.append(line)
+    while proc.poll() is None:
+        with lock:
+            new_lines = list(full_lines)[printed:]
+            printed = len(full_lines)
+        for line in new_lines:
+            sys.stdout.write("\r" + " " * width + "\r")
+            print(f"    {line}")
 
         elapsed = time.monotonic() - start
         spin = spinner_frames[frame_i % len(spinner_frames)]
         frame_i += 1
-
-        print(f"    {line}")
         status = f"[{spin}] running ({elapsed:0.1f}s)"
         sys.stdout.write("\r" + status[:width].ljust(width))
         sys.stdout.flush()
+        time.sleep(0.125)
+
+    with lock:
+        new_lines = list(full_lines)[printed:]
+    for line in new_lines:
+        sys.stdout.write("\r" + " " * width + "\r")
+        print(f"    {line}")
 
     sys.stdout.write("\r" + " " * width + "\r")
     rc = proc.poll()
@@ -274,7 +361,9 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
     ]
     print(f"[*] Running: {' '.join(cmd)}")
     returncode, combined_output = _run_with_live_view(
-        cmd, cwd=BH_AUTOMATE_DIR, title=f"Spinning up BloodHound instance '{name}'"
+        cmd, cwd=BH_AUTOMATE_DIR,
+        title=f"Spinning up BloodHound instance '{name}'",
+        project_name=name,
     )
 
     if returncode != 0:
