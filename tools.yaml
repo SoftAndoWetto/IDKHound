@@ -115,20 +115,18 @@ tools:
     kind: python-venv
     path: ConfigManBearPig
     venv: venv
-    entry: python/openhound collect sccm
+    entry: python/configmanbearpig.py
     repo: https://github.com/SpecterOps/ConfigManBearPig.git
     branch: python
     version_cmd: ["--version"]
-    # Needs to send/receive raw UDP broadcast (SCCM/MECM discovery), which
-    # needs a raw socket - runner.py prefixes its argv with `sudo` because
-    # of this flag. Every other tool in this manifest runs unprivileged.
     sudo: true
     install:
       - "git checkout python"
       - "python3 -m venv {venv}"
       - "{pip} install python/."
     update: ["git checkout python", "git pull", "{pip} install python/."]
-    command_template: "{output_dir} -d {dc_ip} -u {username} -p {password} --dc {dc_ip} -o {output_dir} -m All --dns {dc_ip} --run-all"
+    # Note the double backslash here: \\{username}
+    command_template: "-d {domain} -dc {dc_ip} -u '{domain}\\{username}' -p {password} -m All -o {output_dir}"
 
 # Note: I think I also need LDAPS flag (optional) for every tool and exclude those that dont have one when the flag is specified
 
