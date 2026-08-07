@@ -63,7 +63,10 @@ def render_command(manifest_data: dict, tool_key: str, args: RunArgs) -> list:
     }
 
     rendered_tokens = []
-    for tok in shlex.split(template):
+    # posix=False preserves literal quotes in tokens instead of stripping 
+    # them as shell syntax. This allows single quotes specified in the YAML 
+    # to be passed directly to the tool.
+    for tok in shlex.split(template, posix=True):
         for placeholder, value in subs.items():
             if placeholder in tok:
                 tok = tok.replace(placeholder, value)
@@ -88,7 +91,11 @@ def run(args: RunArgs, manifest_data: dict) -> bool:
         try:
             argv = render_command(manifest_data, tool_key, args)
             live.stage(f"{tool_key} for {args.domain} / {args.username}")
-            live.info_line(live.colorize(' '.join(shlex.quote(a) for a in argv), live.C.DIM))
+            # We join the argv list directly without shlex.quote() for display.
+            # Since execution uses a list (subprocess, no shell), shell quoting 
+            # is irrelevant. shlex.quote() would visually double-wrap tokens 
+            # that already contain literal quotes, confusing the user.
+            live.info_line(live.colorize(' '.join(argv), live.C.DIM))
         except ConfigError as e:
             live.err_line(f"{tool_key}: {e}")
             all_ok = False
