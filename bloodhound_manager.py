@@ -19,8 +19,11 @@ State file: state/bloodhound_instance.json
 """
 
 import argparse
+import grp
 import json
 import os
+import pwd
+import shlex
 import shutil
 import stat
 import subprocess
@@ -31,6 +34,7 @@ from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 
+import live_output as live
 import manifest as mf
 
 try:
@@ -142,6 +146,173 @@ def setup_manual(url: str, username: str, password_env: str, neo4j_url: str = No
 
 
 # --------------------------------------------------------------------------- #
+# Docker prerequisites - bloodhound-automate is entirely docker-compose
+# under the hood, so none of it works without: the docker + compose
+# binaries present, the daemon actually running, and the invoking user
+# actually able to talk to it. That last one has a sharp edge (see
+# _docker_group_active below), which is why it gets its own check instead
+# of just being "is docker in PATH".
+# --------------------------------------------------------------------------- #
+
+def _run_ok(cmd, timeout=10) -> bool:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=timeout).returncode == 0
+    except (subprocess.TimeoutExpired, FileNotFoundError):
+        return False
+
+
+def _systemctl_is_active(unit: str) -> str:
+    try:
+        res = subprocess.run(["systemctl", "is-active", unit], capture_output=True, text=True, timeout=10)
+        return res.stdout.strip() or res.stderr.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+        return f"unknown ({e})"
+
+
+def _current_username() -> str:
+    try:
+        return pwd.getpwuid(os.getuid()).pw_name
+    except (KeyError, AttributeError):
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+
+
+def _user_in_docker_group(username: str) -> bool:
+    """
+    True if `username` is listed as a docker group member in /etc/group -
+    either as a supplementary member, or because docker is their primary
+    group. This is what `sudo usermod -aG docker $USER` updates - whether
+    or not that's actually *active* for any given running process is a
+    separate question (see _docker_group_active).
+    """
+    try:
+        docker_grp = grp.getgrnam("docker")
+    except KeyError:
+        return False  # docker group doesn't even exist - package isn't installed
+    if username in docker_grp.gr_mem:
+        return True
+    try:
+        return pwd.getpwnam(username).pw_gid == docker_grp.gr_gid
+    except KeyError:
+        return False
+
+
+def _docker_group_active() -> bool:
+    """
+    True if 'docker' is among the groups active for *this specific
+    process* right now. `usermod -aG docker $USER` only updates
+    /etc/group - it does not retroactively grant the new group to any
+    process/shell that was already running (including the one this script
+    was launched from). Only a new login, or an explicit `newgrp docker`
+    / `sg docker`, picks it up. This is the actual source of "I ran
+    usermod but docker still says permission denied."
+    """
+    try:
+        docker_gid = grp.getgrnam("docker").gr_gid
+    except KeyError:
+        return False
+    return docker_gid in os.getgroups()
+
+
+def _needs_sg_wrap() -> bool:
+    """
+    True when the user is a docker group member on paper but this process
+    hasn't picked it up yet - i.e. exactly the "ran usermod, didn't
+    newgrp/relogin" situation. When true, every docker/docker-compose/
+    bloodhound-automation call this module makes gets routed through
+    `sg docker -c "..."`, which runs a single subprocess with the docker
+    group active - the scriptable equivalent of `newgrp docker`, without
+    needing anything from the parent shell.
+    """
+    return _user_in_docker_group(_current_username()) and not _docker_group_active()
+
+
+def _wrap_docker(cmd: list) -> list:
+    if _needs_sg_wrap():
+        return ["sg", "docker", "-c", shlex.join(cmd)]
+    return cmd
+
+
+class DockerNotReady(Exception):
+    pass
+
+
+def check_docker_prereqs():
+    """
+    Call before doing anything that shells out to docker (setup_automate,
+    nuke). Verifies, in order:
+
+      1. docker.io / docker-ce is installed
+      2. docker-compose is available (either the standalone v1 binary, or
+         the `docker compose` v2 plugin - bloodhound-automate itself picks
+         whichever it finds, so both count as satisfying this)
+      3. the docker service is actually running
+      4. the current user can actually talk to docker right now - not
+         just "is in the group on paper somewhere"
+
+    Raises DockerNotReady with an actionable message (including the exact
+    commands to run) rather than letting bloodhound-automate fail deep
+    inside its own subprocess with a much less obvious error.
+    """
+    live.info_line("Checking docker prerequisites...")
+
+    missing_pkgs = []
+    if not shutil.which("docker"):
+        missing_pkgs.append("docker.io")
+    has_compose = bool(shutil.which("docker-compose")) or _run_ok(["docker", "compose", "version"])
+    if not has_compose:
+        missing_pkgs.append("docker-compose")
+
+    if missing_pkgs:
+        raise DockerNotReady(
+            f"Missing: {', '.join(missing_pkgs)}\n"
+            f"    Install with: sudo apt install -y {' '.join(missing_pkgs)}"
+        )
+    live.ok_line("docker and docker-compose are installed.")
+
+    status = _systemctl_is_active("docker")
+    if status != "active":
+        raise DockerNotReady(
+            f"docker service is '{status}', not 'active'.\n"
+            f"    Start it with:\n"
+            f"        sudo systemctl start docker\n"
+            f"        sudo systemctl enable docker   # so it survives reboots\n"
+            f"        sudo systemctl status docker   # to see why, if it still won't start"
+        )
+    live.ok_line("docker service is active.")
+
+    username = _current_username()
+    listed = _user_in_docker_group(username)
+    active = _docker_group_active()
+
+    if not listed:
+        raise DockerNotReady(
+            f"User '{username}' is not in the docker group.\n"
+            f"    Add them with:\n"
+            f"        sudo usermod -aG docker {username}\n"
+            f"        newgrp docker      # refreshes membership in this shell\n"
+            f"    then re-run this command."
+        )
+
+    if not active:
+        # Not fatal - _wrap_docker() routes every docker call this module
+        # makes through `sg docker -c` for the rest of this run, so it's
+        # safe to continue. Still worth flagging loudly: it's the classic
+        # "usermod ran, nothing logged out/in since" gap, and the workaround
+        # only covers calls made *by this script* - anything the user runs
+        # directly in their own shell afterward will still need a real
+        # newgrp/relogin.
+        live.warn_line(
+            f"'{username}' is in the docker group, but this shell hasn't "
+            f"picked it up yet (usermod -aG only applies to new sessions). "
+            f"Continuing - docker calls made by this tool will be routed "
+            f"through 'sg docker' for this run. Run 'newgrp docker' (or log "
+            f"out/in) before using docker directly yourself."
+        )
+    else:
+        live.ok_line(f"'{username}' has active docker group membership.")
+
+
+# --------------------------------------------------------------------------- #
 # bloodhound-automate setup
 # --------------------------------------------------------------------------- #
 
@@ -196,13 +367,13 @@ def _run_with_live_view(cmd, cwd, title: str, project_name: str = None,
 
     def _stream_container_logs(cid: str):
         name_res = subprocess.run(
-            ["docker", "inspect", "--format", "{{.Name}}", cid],
+            _wrap_docker(["docker", "inspect", "--format", "{{.Name}}", cid]),
             capture_output=True, text=True,
         )
         cname = name_res.stdout.strip().lstrip("/") or cid[:12]
         try:
             log_proc = subprocess.Popen(
-                ["docker", "logs", "-f", "--tail", "0", cid],
+                _wrap_docker(["docker", "logs", "-f", "--tail", "0", cid]),
                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
             )
         except FileNotFoundError:
@@ -338,14 +509,12 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
 
 
 
-    # Note need to add checks for 
-    #sudo apt install docker.io
-    #sudo apt install docker-compose
-    #sudo usermod -aG docker $USER
-    #sudo systemctl start docker
-    #sudo systemctl enable docker
-    #sudo systemctl status docker
-    #newgrp docker (Or some other way to reload idk)
+    try:
+        check_docker_prereqs()
+    except DockerNotReady as e:
+        print(f"[!] {e}")
+        sys.exit(1)
+
     if not mf.is_installed(_manifest, BH_AUTOMATE_KEY):
         print(f"[!] bloodhound-automation isn't installed. Run:\n"
               f"    python3 installer.py install --only {BH_AUTOMATE_KEY}")
@@ -360,6 +529,11 @@ def setup_automate(name: str, bp: int = DEFAULT_BP, np: int = DEFAULT_NP,
         name,
     ]
     print(f"[*] Running: {' '.join(cmd)}")
+    # bloodhound-automation shells out to docker-compose itself, and
+    # inherits this process's group list when it does - so if *we* don't
+    # have active docker group membership, neither will it, regardless of
+    # what /etc/group says. Same sg-docker wrap as everywhere else.
+    cmd = _wrap_docker(cmd)
     returncode, combined_output = _run_with_live_view(
         cmd, cwd=BH_AUTOMATE_DIR,
         title=f"Spinning up BloodHound instance '{name}'",
@@ -418,10 +592,10 @@ def nuke(name: str, assume_yes: bool = False):
 
     print(f"[*] Nuking everything matching '{name}'...")
 
-    # Docker Compose lowercases project names for containers/networks, 
+    # Docker Compose lowercases project names for containers/networks,
     # so we check for both the exact name and the lowercase version to be safe.
     names_to_check = {name, name.lower()}
-    
+
     ids = set()
     for n in names_to_check:
         ids.update(_docker_list("ps", "-a", "-q", "--filter", f"name={n}"))
@@ -468,12 +642,12 @@ def nuke(name: str, assume_yes: bool = False):
 
 
 def _docker_list(*args) -> list:
-    result = subprocess.run(["docker", *args], capture_output=True, text=True)
+    result = subprocess.run(_wrap_docker(["docker", *args]), capture_output=True, text=True)
     return [line for line in result.stdout.splitlines() if line.strip()]
 
 
 def _docker_run(*args):
-    subprocess.run(["docker", *args], capture_output=True, text=True)
+    subprocess.run(_wrap_docker(["docker", *args]), capture_output=True, text=True)
 
 
 # --------------------------------------------------------------------------- #

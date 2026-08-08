@@ -103,7 +103,7 @@ def run(args: RunArgs, manifest_data: dict) -> bool:
             all_ok = False
             continue
 
-        rc, output = live.run_streaming(
+        rc, output, *_ = live.run_streaming(
             argv,
             title=tool_key,
             num_lines=PANEL_LINES,
