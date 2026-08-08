@@ -61,7 +61,6 @@ tools:
     update: [git pull, "venv/bin/pip install ."]
     command_template: "-d {domain} -u {username} -p {password} -dc-ip {dc_ip}"
 
-################# QUARANTINE #################
   gpohound:
     kind: python-venv
     path: GPOHound
@@ -74,18 +73,6 @@ tools:
       - "{pip} install -e ."
     update: [git pull, "venv/bin/pip install ."]
     command_template: "full -d {domain} -u {username} -p {password} --dc {dc_ip} --output-dir {output_dir} --zip-name gpohound.zip"
-#
-#	 gpoparser:
-#	     kind: python-venv-installed
-#	     path: gpoParser
-#	     venv: venv
-#	     binary: gpoParser
-#	     repo: "https://github.com/synacktiv/gpoParser"
-#	     version_cmd: [""]  # No version tag
-#	     update: [git pull, "venv/bin/pip install ."]
-#	     # Uses 'remote' subcommand
-#	     command_template: "remote -d {domain} -u {username} -p {password} -s {dc_ip}"
-################# QUARANTINE #################
 
   certihound:
     kind: python-venv-editable
@@ -128,7 +115,30 @@ tools:
     # Note the double backslash here: \\{username}
     command_template: "-d {domain} -dc {dc_ip} -u '{domain}\\{username}' -p {password} -m All -o {output_dir}"
 
-# Note: I think I also need LDAPS flag (optional) for every tool and exclude those that dont have one when the flag is specified
+# Currenly has no support for specifying output directory
+#  GhostHound:
+#    kind: cargo-binary
+#    path: ghosthound
+#    binary: target/release/ghosthound
+#    repo: https://github.com/JVBotelho/ghosthound
+#    version_cmd: ["--version"]
+#    install:
+#      - "cargo build --release"
+#    update: [git pull, "cargo build --release"]
+#    command_template: "-d {domain} -u {username} -p {password} --dc-ip {dc_ip} -o {output_dir}"
+
+  NetworkHound:
+    kind: python-venv
+    path: NetworkHound
+    venv: venv
+    entry: NetworkHound.py
+    repo: https://github.com/MorDavid/NetworkHound
+    version_cmd: ["--version"]
+    install:
+      - "python3 -m venv {venv}"
+      - "{pip} install -r requirements.txt"
+    update: ["{pip} install ."]
+    command_template: "--dc {dc_ip} -d {domain} -u {username} -p {password} -o {output_dir} --shadow-it --port-scan --valid-http --ssl --valid-smb --scan-threads 50"
 
   bloodhound-automation:
     kind: python-venv-requirements

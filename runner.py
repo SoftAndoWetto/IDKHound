@@ -103,11 +103,18 @@ def run(args: RunArgs, manifest_data: dict) -> bool:
             all_ok = False
             continue
 
-        rc, output, *_ = live.run_streaming(
+        rc, timed_out, output = live.run_streaming(
             argv,
             title=tool_key,
             num_lines=PANEL_LINES,
         )
+
+        if rc != 0 or timed_out:
+            live.err_line(f"{tool_key}: failed (exit code {rc})")
+            live.dump_tail(output)
+            all_ok = False
+        else:
+            live.ok_line(f"{tool_key}: done")
 
         if rc != 0:
             live.err_line(f"{tool_key}: failed (exit code {rc})")
