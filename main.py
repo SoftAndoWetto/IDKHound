@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 import bloodhound_manager as bhm
+import bloodhound_upload as bhu
 import installer
 import manifest as mf
 import runner
@@ -93,6 +94,14 @@ def cmd_bh(args):
         bhm.nuke(args.name, args.yes)
 
 
+def cmd_upload(args):
+    ok = bhu.run_manual_upload(
+        file=args.file, dir_=args.dir_, url=args.url, user=args.user,
+        password_env=args.password_env, password=args.password,
+    )
+    sys.exit(0 if ok else 1)
+
+
 def cmd_update(args):
     # self-check / self-update operate on the IDKHound repo itself, not on
     # tools.yaml, so they don't need a loaded manifest at all.
@@ -127,7 +136,7 @@ def _preflight_checks(manifest_data, domain=None, dc_ip=None,
                       username=None, password=None) -> bool:
     ok = True
 
-    # BloodHound instance check is removed here so the stateless runner 
+    # BloodHound instance check is removed here so the stateless runner
     # can execute and generate JSON/ZIPs without a live BloodHound connection.
 
     missing = [k for k in mf.all_tool_keys(manifest_data) if not mf.is_installed(manifest_data, k)]
@@ -192,6 +201,13 @@ def cmd_run(args):
     )
 
     ok = runner.run(run_args, manifest_data)
+
+    # Opt-in: only fires if a BloodHound instance was registered via
+    # `bh setup-manual`/`bh auto`. Never turns an otherwise-successful run
+    # into a failure, and never blocks a failed run from still uploading
+    # whatever data *did* get collected.
+    bhu.upload_after_run(run_args.data_dir, args.domain, args.username)
+
     sys.exit(0 if ok else 1)
 
 
@@ -239,6 +255,16 @@ def build_parser():
     p_run.add_argument("--tools", default=None, help="Comma-separated list of tools to run (default: all)")
     p_run.add_argument("--force", action="store_true", help="Ignored in stateless runner, kept for CLI compatibility")
     p_run.set_defaults(func=cmd_run)
+
+    p_upload = sub.add_parser("upload", help="Upload a file or folder of collector output to BloodHound")
+    upload_src = p_upload.add_mutually_exclusive_group(required=True)
+    upload_src.add_argument("--file", type=Path, help="A single .json/.zip file to upload")
+    upload_src.add_argument("--dir", type=Path, dest="dir_", help="Folder to scan recursively for .json/.zip files")
+    p_upload.add_argument("--url", default=None, help="BloodHound URL (default: saved instance)")
+    p_upload.add_argument("--user", default=None, help="Username (default: saved instance)")
+    p_upload.add_argument("--password-env", default=None, help="Env var holding the password")
+    p_upload.add_argument("--password", default=None, help="Password directly (prefer --password-env)")
+    p_upload.set_defaults(func=cmd_upload)
 
     # NOTE: previously defined (cmd_update) but never actually registered as
     # a subcommand, so `update` was unreachable from the CLI - fixed here.
